@@ -16,6 +16,24 @@
  * testable, and it is the same discipline the policy engine follows in Phase 4.
  */
 
+/**
+ * An integer count of paise, as a BRANDED type.
+ *
+ * TypeScript is STRUCTURALLY typed: every `number` is assignable to every
+ * other `number`, so nothing stops `charge(amountInRupees)` when the function
+ * wanted paise. A brand adds a phantom property that exists only at compile
+ * time, making `Paise` and a bare `number` incompatible - so the only way to
+ * obtain one is through `toPaise()`, which validates.
+ *
+ * Zero runtime cost: at runtime a Paise IS just a number.
+ *
+ * We brand money and nothing else. Ids stay plain strings because they are
+ * prefixed (`mnd_`, `usr_`), so a mix-up is visible in logs, and the database
+ * already rejects a wrong-type id via CHECK constraints and foreign keys.
+ * Money has no such backstop - ₹2,000 and 2,000 paise are both valid values.
+ */
+export type Paise = number & { readonly __brand: 'Paise' };
+
 /** A value that cannot be represented exactly as a JS integer. */
 export class MoneyPrecisionError extends Error {
   override readonly name = 'MoneyPrecisionError';
@@ -42,6 +60,35 @@ export const MAX_SAFE_PAISE = Number.MAX_SAFE_INTEGER;
 const RUPEE_STRING = /^(\d{1,15})(?:\.(\d{1,2}))?$/;
 
 /**
+ * The only way to obtain a `Paise` from a plain number.
+ *
+ * Rejects non-integers (a fraction of a paise is not a thing), negatives (a
+ * refund is a different operation with its own audit trail, not a negative
+ * payment), and anything above the exactly-representable range.
+ */
+export function toPaise(value: number): Paise {
+  if (!Number.isInteger(value)) {
+    throw new MoneyFormatError(
+      'Paise must be a whole number; there is no smaller unit than a paisa.',
+    );
+  }
+
+  if (value < 0) {
+    throw new MoneyFormatError(
+      'Paise must not be negative. A refund is a separate operation, not a negative amount.',
+    );
+  }
+
+  if (!Number.isSafeInteger(value)) {
+    throw new MoneyPrecisionError(
+      `Amount exceeds the maximum exactly-representable value of ${MAX_SAFE_PAISE} paise.`,
+    );
+  }
+
+  return value as Paise;
+}
+
+/**
  * Parse a rupee string into exact integer paise.
  *
  *   "4870"     ->  487000
@@ -57,7 +104,7 @@ const RUPEE_STRING = /^(\d{1,15})(?:\.(\d{1,2}))?$/;
  * Input is a STRING on purpose. Accepting a number would mean the caller has
  * already done float arithmetic and the precision is already gone.
  */
-export function paiseFromRupeeString(input: string): number {
+export function paiseFromRupeeString(input: string): Paise {
   const match = RUPEE_STRING.exec(input.trim());
 
   if (match === null) {
@@ -83,7 +130,7 @@ export function paiseFromRupeeString(input: string): number {
     );
   }
 
-  return paise;
+  return paise as Paise;
 }
 
 /**
