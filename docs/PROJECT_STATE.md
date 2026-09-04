@@ -68,11 +68,34 @@ apps/api/src/
     0005_audit.sql                audit_events + the atl_app role
 ```
 
-**Verified working:** 118 tests green (twice in a row, leaving no residue),
-`tsc --noEmit` clean, 5 migrations applied and idempotent, checksum tamper
-detection demonstrated, every constraint and trigger proven by attacking it,
-least privilege proven by connecting as the real runtime role, seed idempotent,
-service boots as `atl_app`.
+Added in Phase 3:
+
+```
+apps/api/src/
+  domain/mandate.ts       MandateTerms value object; validates what SQL cannot
+                          (real IANA timezone, duplicates inside arrays)
+  dto/mandate.ts          Zod wire schemas (strictObject) + domain mappers
+  repositories/mandate.ts SQL for the aggregate; loadForAuthorization is ONE
+                          query via JOIN LATERAL (asserted by a query counter)
+  audit/canonical.ts      canonical JSON + sha256; rejects rather than coerces
+  audit/writer.ts         hash chain; advisory lock; hashes the WHOLE record
+  providers/bank-lookup.ts  Razorpay IFSC (cold path only) / Static / Failing
+  middleware/admin-auth.ts  shared key, timingSafeEqual over SHA-256 digests
+  routes/mandates.ts      6 endpoints; every mutation + its audit event in ONE
+                          transaction
+  db/transaction.ts       withTransaction helper
+  db/migrations/0006_consent.sql  consent_ref + consent_at, NOT NULL
+```
+
+**Verified working:** 275 tests green, `tsc --noEmit` clean, 6 migrations
+applied to an empty database in order, every constraint and trigger proven by
+attacking it, least privilege proven by connecting as the real runtime role,
+audit chain intact across 56+ events, and the whole flow exercised live over
+HTTP (create → add version → read v1 unchanged → revoke → 409), including a
+real call to Razorpay's public IFSC API returning live HDFC Bank data.
+
+**Endpoints:** see `docs/API.md`. Mutations require `x-atl-admin-key`
+(placeholder auth — Phase 5 replaces it). Reads are currently open.
 
 **Environment:** Node 24.13, TypeScript 7.0.2, Vitest 5, Fastify 5.12,
 PostgreSQL 16.15 via Homebrew (`brew services`), database `atl_india_dev`.
@@ -131,3 +154,12 @@ Phase 2 spend query, with real row counts.
 - `docker-compose.yml` is committed but has never been run (ADR-0004).
 - No CI yet; no linter configured yet (ESLint arrives with Phase 11 hardening,
   or sooner if churn justifies it).
+- **Read endpoints are unauthenticated**, and the admin key is one shared
+  secret with no rotation or per-caller identity — so `createdBy` records a
+  *claim* about who acted, not a verified identity. Phase 5 fixes this.
+- `appendAuditEvent` cannot verify it is inside a transaction; enforced by
+  documentation and the `txClient` parameter name.
+- Route and audit tests permanently add rows (those tables are append-only by
+  design); cleared only by the full reset in `docs/DATABASE.md`.
+- The GitHub repo is **public**. `Research/` contains fabricated attributions;
+  the README carries a prominent disclaimer.
