@@ -353,13 +353,32 @@ trigger that raises on `UPDATE`/`DELETE`.
 trigger stops a misconfigured grant. Neither alone is defence in depth.
 
 **Threat:** credential theft from the database.
-**Vulnerability:** storing an agent's HMAC secret in a readable form means a
-database read is a full compromise of every agent.
-**Mitigation:** store an argon2id hash. We only ever verify a signature, never
-need the original.
-**Why this one:** hashing is irreversible; encryption implies a key that also
-lives somewhere and can also be stolen. If you never need the plaintext back,
-never store something that can give it back.
+**Vulnerability:** storing an agent's signing secret in a readable form means a
+database read is a full compromise of every agent — an attacker can then forge
+authorization requests from any of them.
+**Mitigation:** **Ed25519 public-key signatures.** The agent holds the private
+key and never transmits it; we store only the public key. There is no secret at
+rest to steal.
+
+> **Correction (2026-09-04).** An earlier draft of this section said we would
+> store an argon2id hash of an HMAC secret because "we only ever verify, never
+> need the original". That is wrong: verifying an HMAC requires *recomputing*
+> it, which requires the actual key. Hash-only storage works for passwords —
+> where the client sends the secret and we compare hashes — not for request
+> signing. See ADR-0014.
+
+**Why this one:** it removes the asset rather than protecting it. Encryption
+implies a key that also lives somewhere and can also be stolen; hashing is
+incompatible with HMAC verification. With asymmetric keys the question "how do
+we protect the stored secret?" stops existing.
+
+**The general rule — choose symmetric vs asymmetric by asking who verifies:**
+
+| Direction | Scheme | Reason |
+|---|---|---|
+| Agent → us (request signing) | **Ed25519** | two parties, and we must not be able to impersonate the agent |
+| Us → us (the voucher) | HMAC-SHA256 | one party is both signer and verifier; symmetric is correct and simpler |
+| Razorpay → us (webhooks) | HMAC-SHA256 | their scheme, not our choice |
 
 **Threat:** PII over-collection.
 **Vulnerability:** it is tempting to store full phone numbers, full VPAs and raw

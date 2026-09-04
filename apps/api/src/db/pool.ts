@@ -8,6 +8,7 @@
 import pg from 'pg';
 import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
+import { registerPostgresTypeParsers } from './types.js';
 
 export type Pool = pg.Pool;
 
@@ -26,6 +27,12 @@ export type Pool = pg.Pool;
 const MAX_CONNECTIONS = 10;
 
 export function createPool(config: Config, logger: Logger): Pool {
+  /**
+   * Must happen before any query runs. Installed here rather than in each
+   * entrypoint so it cannot be forgotten: no pool exists without it.
+   */
+  registerPostgresTypeParsers();
+
   const pool = new pg.Pool({
     connectionString: config.DATABASE_URL,
 
