@@ -12,6 +12,7 @@ import { createMandateTerms, type Mandate, type MandateVersion } from '../domain
 import {
   afaExemptionThreshold,
   categoryBlocklist,
+  mandateAgentMatch,
   mandateExpiry,
   mandateNotYetValid,
   mandateRevoked,
@@ -23,6 +24,7 @@ import {
   velocityLimit,
   windowSpendLimit,
 } from './rules.js';
+import { evaluate } from './engine.js';
 import type { EvaluationInput } from './types.js';
 
 const PER_TXN = 200_000; // ₹2,000
@@ -76,6 +78,7 @@ function input(overrides: Partial<EvaluationInput> = {}): EvaluationInput {
     mandate: activeMandate,
     version: version(),
     attempt: {
+      agentId: 'agt_test',
       amountPaise: toPaise(124_000),
       merchantId: 'mer_bigbasket',
       merchantMcc: '5411',
@@ -92,6 +95,57 @@ function input(overrides: Partial<EvaluationInput> = {}): EvaluationInput {
     ...overrides,
   };
 }
+
+describe('MANDATE_AGENT_MATCH - a mandate is not transferable', () => {
+  // WHAT: the authenticated caller must be the agent the mandate names.
+  // WHY:  without it, any agent holding a valid key could spend against any
+  //       mandate in the system - the worst hole this API could have.
+  // PREVENTS: agent A using agent B's spending authority.
+  it('passes when the signing agent owns the mandate', () => {
+    const result = mandateAgentMatch(input());
+
+    expect(result.verdict).toBe('PASS');
+    expect(result.ruleCode).toBe('MANDATE_AGENT_MATCH');
+  });
+
+  it('BLOCKS when a different agent signed the request', () => {
+    const result = mandateAgentMatch(
+      input({ attempt: { ...input().attempt, agentId: 'agt_impostor' } }),
+    );
+
+    expect(result.verdict).toBe('BLOCK');
+    // The reason must name BOTH agents: an explanation that omits who actually
+    // called is useless during an investigation.
+    expect(result.reason).toContain('agt_test');
+    expect(result.reason).toContain('agt_impostor');
+  });
+
+  it('runs first, so its reason wins over any other failure', () => {
+    // A wrong agent presenting an ALSO-over-limit mandate must be told about
+    // the identity failure, not the amount.
+    const decision = evaluate(
+      input({
+        attempt: {
+          ...input().attempt,
+          agentId: 'agt_impostor',
+          amountPaise: toPaise(9_999_999),
+        },
+      }),
+    );
+
+    expect(decision.verdict).toBe('BLOCK');
+    expect(decision.reason).toContain('not transferable');
+  });
+
+  it('compares identity by exact string, not by prefix or case', () => {
+    for (const impostor of ['agt_tes', 'agt_test2', 'AGT_TEST', ' agt_test']) {
+      const result = mandateAgentMatch(
+        input({ attempt: { ...input().attempt, agentId: impostor } }),
+      );
+      expect(result.verdict, `${impostor} must not match agt_test`).toBe('BLOCK');
+    }
+  });
+});
 
 describe('MANDATE_PER_TXN_LIMIT - boundary values', () => {
   const at = (amount: number) =>

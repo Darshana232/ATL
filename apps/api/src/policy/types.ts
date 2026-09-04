@@ -62,6 +62,17 @@ export interface RuleEvaluation {
 
 /** The payment being attempted. */
 export interface AuthorizationAttempt {
+  /**
+   * The agent that ACTUALLY called, established by signature verification -
+   * never taken from the request body.
+   *
+   * The engine compares it to `mandate.agentId`. That comparison is a policy
+   * question ("was this permitted by this mandate?"), so it produces a rule
+   * evaluation like every other check rather than vanishing into a 403 that
+   * leaves no record. An agent probing other people's mandates is exactly the
+   * pattern a security review wants to be able to COUNT.
+   */
+  readonly agentId: string;
   readonly amountPaise: Paise;
   readonly merchantId: string;
   /** ISO 18245 code, resolved by the caller from the merchants table. */

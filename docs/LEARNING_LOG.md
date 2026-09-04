@@ -174,3 +174,70 @@ word-split unquoted variables the way bash does. *Lesson:* put directories on
    model transfers to every validation boundary we add.
 
 Do not go broader than this list yet. Phase 2 will supply the next one.
+
+---
+
+## Phase 5 — The authorization API
+
+**Concepts**
+
+1. **Signing is not encrypting.** A signature hides nothing; it proves the bytes
+   were not altered and that the sender holds the private key. Confidentiality
+   is TLS's job.
+2. **Choose asymmetric vs symmetric by asking who needs to verify.** Two parties
+   where one must not impersonate the other → asymmetric (Ed25519, agent → us).
+   One party minting *and* verifying → symmetric (HMAC, our voucher).
+3. **Why an HMAC secret cannot be stored as a hash.** Verifying an HMAC requires
+   recomputing it, which requires the real key. Hash-only storage is right for
+   passwords, wrong for request signing.
+4. **Canonical signing strings and field-splitting ambiguity.** Without
+   separators, `"ab"+"cd"` and `"a"+"bcd"` are the same bytes — one signature
+   would authorise two different requests.
+5. **Replay ≠ idempotency, but one mechanism solves both** when the idempotency
+   key is inside the signature and unique in the database.
+6. **Capability tokens vs identity tokens.** "the bearer may capture ₹1,240 at
+   this merchant, once, before 08:53" is a far smaller thing to leak than
+   "I am agent X".
+7. **TOCTOU.** Two correct evaluations can still produce a wrong outcome if they
+   are allowed to overlap. The fix is a lock, not a smarter check.
+8. **`SELECT … FOR UPDATE`** vs SERIALIZABLE vs advisory locks — and why a retry
+   loop is a cost, not a free upgrade.
+9. **Timezone-aware calendar arithmetic** with `Intl`, including why a two-pass
+   offset calculation is needed across a DST boundary, and why `getDay()`'s
+   Sunday-is-0 would put Sunday's spending in the wrong week.
+10. **Constant-time comparison**, and why `timingSafeEqual` throws on a length
+    mismatch (so lengths are compared first).
+11. **Fail closed.** No signing secret → mint no voucher. An unsigned "voucher"
+    would be worse than none.
+12. **Structural safety beats signalling.** A BLOCK returns 200 *and no token*.
+
+**Skills practised**
+
+- Writing security tests that name the attack they prevent, not the function
+  they call.
+- Running **positive controls**: deliberately breaking the rule and the lock to
+  confirm the suite noticed. Both did.
+- Recognising a test that passes while executing nothing — twice now, in two
+  different disguises.
+- Multi-row parameterised INSERTs without string-interpolating values into SQL.
+- Dependency-injecting a clock so time-dependent behaviour is testable and a
+  demo is reproducible.
+
+**Mistakes and what they taught**
+
+- An HTTP test for duplicate headers passed without ever running the branch,
+  because `inject` collapses them. → *Ask what would have to break for this test
+  to fail. If nothing, it is not a test.*
+- Clever index arithmetic in SQL-building code. → *In SQL builders, "clever" is
+  a smell.*
+- `mkdir` in a stale working directory. → *A shell remembers its cwd.*
+- The demo blocked on TIME_WINDOW at 04:55. → *Pin what must be pinned, and say
+  so on screen.*
+
+**What to study next**
+
+- RFC 8032 (Ed25519) — skim the security-considerations section only.
+- AWS SigV4 and Stripe's webhook signature docs, as two real canonical-string
+  designs to compare against ours.
+- PostgreSQL docs, "Explicit Locking" and "Transaction Isolation".
+- OWASP ASVS v4, section 2 (authentication) and section 3 (session management).

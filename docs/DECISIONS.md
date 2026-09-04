@@ -309,3 +309,155 @@ and a database that was recovering now faces a thundering herd of reconnects.
 
 **Production implication.** Wire `live` to the container liveness probe and
 `/v1/health` to the readiness probe and load-balancer target group.
+
+---
+
+## ADR-0014 — Consolidate the roadmap from thirteen phases to nine
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** The build plan is **nine phases** (1–9), plus a Phase 0 prologue
+that was repository and documentation setup rather than product. Three pairs of
+the old plan are merged; nothing is dropped.
+
+| Old | New | Why the merge is coherent |
+|---|---|---|
+| 7 Payments + 8 Agent runtime | **7** | Both are adapter work on the *outside* of the trust boundary — one adapting to a payment rail, one to a language model. Neither is a demo without the other. |
+| 9 Dashboard + 10 Reports | **8** | The reports *are* screens in the dashboard. Splitting them meant building the UI shell twice. |
+| 11 Security + 12 Observability/deploy | **9** | One "make it shippable" pass: threat model, hardening, CI, observability, deploy, demo. |
+
+**Context.** The thirteen-phase plan was written before any code and was shaped
+by topic rather than by deliverable. Under buildathon time pressure the useful
+unit is "a thing you can demonstrate", and three of the old phases were halves
+of one demonstrable thing.
+
+**Alternatives considered.** *Renumber all phases 1–9* — rejected: it would
+invalidate every `PHASE_xx` reference in `docs/` and `Understanding/`, and the
+completed phases would acquire numbers that no commit message uses. *Leave it at
+thirteen* — rejected: the user asked for nine, and the merged shape is genuinely
+the more honest description of the remaining work.
+
+**Reasoning.** Phases 0–6 keep their original numbers, so every existing
+reference remains correct and no completed work is renamed. Only the unbuilt
+tail is reshaped, which is the part where reshaping costs nothing.
+
+**Tradeoff.** Phases 7, 8 and 9 are each larger than a former single phase, so
+"phase complete" is a coarser signal near the end of the project. Mitigated by
+each phase file listing its steps individually, so progress is still trackable
+below phase granularity.
+
+**Production implication.** None. This is a planning artefact, not an
+architectural one.
+
+**Also recorded:** a plain-English companion documentation set was created at
+`Concepts Learning and Understanding/` — 67 concept cards, one file per phase,
+and a file-by-file codebase tour, written for a second-year CS reader who needs
+to explain the system out loud. It is a third audience alongside `docs/` (how it
+works) and `Understanding/` (why it works, in engineering depth).
+
+---
+
+## ADR-0015 — Ed25519 for agent requests, HMAC for the voucher
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** Two different cryptographic schemes, chosen by asking *who needs
+to verify*.
+
+| Direction | Scheme | Rationale |
+|---|---|---|
+| agent → us | **Ed25519**, asymmetric. The agent holds the private key; `agent_credentials` stores only the public key. | Two parties, and one must not be able to impersonate the other. A complete dump of our database contains no secret capable of forging a request. |
+| us → us (payment voucher) | **HMAC-SHA256**, symmetric, key in `VOUCHER_SIGNING_SECRET`. | One party mints *and* verifies. A shared secret is simpler and faster; asymmetric buys nothing. |
+
+**Context and numbering.** An earlier draft planned an HMAC shared secret for
+agents, stored as an argon2 hash. That does not work: verifying an HMAC requires
+recomputing it, which requires the actual key. Hash-only storage is correct for
+passwords (the client sends the secret and we compare hashes), not for request
+signing. `0002_identity.sql` records this reasoning and cites "ADR-0014" —
+written before ADR-0014 was taken by the roadmap consolidation. **That comment
+means this ADR.** Applied migrations are immutable (ADR-0006), so the collision
+is recorded here rather than edited away.
+
+**The signing string.** `ATL-v1 \n METHOD \n path \n timestamp \n keyId \n
+idempotencyKey \n sha256(body)`, newline-joined.
+
+- **The body is hashed, not signed directly.** The signing string stays a fixed
+  small size regardless of cart size, and the signature can be verified *before*
+  JSON parsing. Authenticate first, interpret second — a parser is a far larger
+  attack surface than a hash.
+- **One field per line.** Concatenated without separators, `keyId` `"ab"` plus
+  key `"cd"` and `"a"` plus `"bcd"` are identical bytes, so one signature would
+  validate two different requests. Header values are constrained to printable,
+  single-line ASCII so no field can contain the separator.
+
+**Replay.** A ±5 minute timestamp window plus the existing
+`UNIQUE (agent_id, idempotency_key)`. The idempotency key is *inside* the signed
+string, so a replay carries the same key and returns the original decision
+rather than producing a new one. **No nonce table is required** — the
+idempotency constraint is the nonce store, and the timestamp window is what
+keeps the set of keys we must remember finite.
+
+**Alternatives considered.** JWT/JWS for both directions (rejected: a large
+library and an algorithm-confusion history for two fixed, tiny use cases);
+mutual TLS (rejected: correct, but certificate distribution is a project of its
+own and it authenticates a *connection*, not a request); a nonce table
+(rejected: a second mechanism for a problem the existing unique constraint
+already solves).
+
+**Production implication.** The voucher becomes an asymmetrically signed
+capability token with the private key in an HSM/KMS, so a compromised payment
+service can verify vouchers but not mint them. Neither the wire format nor the
+architecture changes.
+
+---
+
+## ADR-0016 — A blocked authorization returns HTTP 200
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** `POST /v1/authorize` returns **200** for `PASS`, `FLAG` *and*
+`BLOCK`, with the verdict in the body. 401/400/404/409 are reserved for "we
+could not decide".
+
+**Reasoning.** The decision is the resource, and producing it *succeeded*. A
+BLOCK is a recorded business outcome with a thirteen-rule breakdown attached,
+not a transport failure — and a status code cannot carry that breakdown. Using
+403 would also conflate "your request was malformed or unauthenticated" with
+"the policy said no", which are different problems for a caller.
+
+**The safety does not depend on the status code.** A BLOCK response carries
+`voucher: null`. A client that ignores `verdict` entirely still cannot pay,
+because there is no token to present to the payment service. Structural safety
+beats conventional signalling.
+
+**Alternatives considered.** 403 Forbidden (rejected: see above); 402 Payment
+Required (rejected: it means "pay to proceed", which is not what happened);
+409 Conflict (rejected: nothing conflicted).
+
+**Tradeoff.** Several payment APIs do use 402/403 for a denial, so a careless
+integrator could read 200 as "paid". Mitigated by the null voucher, by
+`verdict` being a required top-level field, and by documenting it in `API.md`.
+
+---
+
+## ADR-0017 — The agent-identity check is a policy rule, not a route guard
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** "Is the authenticated agent the one this mandate authorises?"
+became `MANDATE_AGENT_MATCH`, rule 1 of the policy engine, and `ENGINE_VERSION`
+moved from `engine-v1` to `engine-v2`.
+
+**Reasoning.** It is a policy question — *was this permitted by this mandate?* —
+and it belongs in the explainable breakdown with everything else. A 403 in the
+route would leave no rule evaluation, no decision row and nothing to count, and
+an agent probing other people's mandates is exactly the pattern a security
+review wants to be able to count. Running it *first* also means the headline
+reason is the identity failure rather than some later limit.
+
+**The engine version bump is the mechanism working.** Decisions recorded under
+`engine-v1` stay explainable against the twelve rules that actually ran; nobody
+has to pretend a thirteenth was applied retroactively.
+
+**Tradeoff.** A blocked identity check costs a decision row and thirteen rule
+rows, where a 403 would cost nothing. That is the price of the evidence, and the
+evidence is the product.
+
+**Note.** `attempt.agentId` comes from signature verification and never from the
+request body — otherwise the rule would compare a claim against a claim.

@@ -23,7 +23,15 @@ import type { Decision, EvaluationInput, RuleEvaluation, Verdict } from './types
  * Debt (PHASE_04 §12): nothing forces this to change when a rule does. A test
  * comparing a hash of the rule set would.
  */
-export const ENGINE_VERSION = 'engine-v1';
+export const ENGINE_VERSION = 'engine-v2';
+
+/*
+ * engine-v1 -> engine-v2 (Phase 5): added MANDATE_AGENT_MATCH.
+ *
+ * The bump is the mechanism working as designed. Decisions recorded under v1
+ * stay explainable against the twelve rules that actually ran; nobody has to
+ * pretend a thirteenth rule was applied retroactively.
+ */
 
 /**
  * Combine per-rule outcomes into one verdict.

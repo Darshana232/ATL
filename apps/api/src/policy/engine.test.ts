@@ -53,6 +53,7 @@ function input(overrides: Partial<EvaluationInput> = {}): EvaluationInput {
     mandate: activeMandate,
     version: testVersion,
     attempt: {
+      agentId: 'agt_test',
       amountPaise: toPaise(124_000),
       merchantId: 'mer_bigbasket',
       merchantMcc: '5411',

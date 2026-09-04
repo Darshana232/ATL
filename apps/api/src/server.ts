@@ -16,7 +16,9 @@ import type { Logger } from './logger.js';
 import type { Pool } from './db/pool.js';
 import { healthRoutes } from './routes/health.js';
 import { mandateRoutes } from './routes/mandates.js';
+import { authorizeRoutes } from './routes/authorize.js';
 import { RazorpayIfscProvider, type BankLookupProvider } from './providers/bank-lookup.js';
+import { MockRiskProvider, type RiskProvider } from './providers/risk.js';
 
 export interface ServerDependencies {
   config: Config;
@@ -28,6 +30,14 @@ export interface ServerDependencies {
    * (mandate creation) - never during authorization. See ADR-0013.
    */
   bankLookup?: BankLookupProvider;
+  /**
+   * Advisory risk scoring. Injected so tests can supply a provider that
+   * declines to answer, proving a degraded risk service cannot change a
+   * compliance verdict.
+   */
+  risk?: RiskProvider;
+  /** Injectable clock for the authorization path. Tests drive time directly. */
+  now?: () => Date;
 }
 
 /**
@@ -37,7 +47,14 @@ export interface ServerDependencies {
  * this function a pool pointing at a throwaway database, or a deliberately
  * broken one, without touching global state or monkey-patching modules.
  */
-export function buildServer({ config, logger, pool, bankLookup }: ServerDependencies): FastifyInstance {
+export function buildServer({
+  config,
+  logger,
+  pool,
+  bankLookup,
+  risk,
+  now,
+}: ServerDependencies): FastifyInstance {
   const app = Fastify({
     /**
      * Fastify 5 takes an existing pino instance as `loggerInstance`.
@@ -76,6 +93,42 @@ export function buildServer({ config, logger, pool, bankLookup }: ServerDependen
     bodyLimit: 1_048_576,
   });
 
+  /* --- Raw body capture, for signature verification --------------------- */
+  /**
+   * Fastify parses JSON and throws the original text away. The agent signs a
+   * SHA-256 of the RAW BYTES, so we must keep them: re-serialising the parsed
+   * object would produce different bytes (key order, whitespace, number
+   * formatting) and every signature would fail.
+   *
+   * Verifying against raw bytes is also the safer order. We authenticate first
+   * and interpret second, so a malformed or hostile body never reaches the
+   * parser on an unauthenticated request... and a parser is a far larger attack
+   * surface than a hash.
+   */
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (request, rawBody, done) => {
+      const text = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
+      request.rawBody = text;
+
+      if (text.trim() === '') {
+        // An empty body is valid JSON to nobody. Signalled as a 400, with the
+        // raw text still recorded so the signature check can run first.
+        done(null, undefined);
+        return;
+      }
+
+      try {
+        done(null, JSON.parse(text) as unknown);
+      } catch (error) {
+        const failure = error as Error & { statusCode?: number };
+        failure.statusCode = 400;
+        done(failure, undefined);
+      }
+    },
+  );
+
   /* --- Routes ---------------------------------------------------------- */
   app.register(healthRoutes({ pool, startedAt: Date.now() }));
   app.register(
@@ -83,6 +136,14 @@ export function buildServer({ config, logger, pool, bankLookup }: ServerDependen
       pool,
       config,
       bankLookup: bankLookup ?? new RazorpayIfscProvider(),
+    }),
+  );
+  app.register(
+    authorizeRoutes({
+      pool,
+      config,
+      risk: risk ?? new MockRiskProvider(),
+      now,
     }),
   );
 
@@ -125,8 +186,6 @@ export function buildServer({ config, logger, pool, bankLookup }: ServerDependen
     });
   });
 
-  // Referenced so the parameter is not unused; config drives real behaviour
-  // from Phase 5 onward (rate limits, CORS origins, voucher signing).
   app.log.debug({ env: config.NODE_ENV }, 'server built');
 
   return app;

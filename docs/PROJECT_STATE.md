@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-05 · **Current phase:** 4 complete, 5 not started
+**Last updated:** 2026-09-05 · **Current phase:** 5 complete, 6 in progress
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -25,8 +25,8 @@ product. Consolidated from thirteen on 2026-09-05 — see **ADR-0014**. Phases
 | 1 | Foundation: workspace, config, logging, DB pool, migrations, health | ✅ complete |
 | 2 | Full core schema + least-privilege role + seed data | ✅ complete |
 | 3 | Mandate domain, DTOs, repository, audit writer, mandate API | ✅ complete |
-| 4 | Deterministic policy engine (12 rules) | ✅ complete |
-| 5 | Authorization endpoint: agent auth, HMAC, idempotency, replay, voucher | ⬜ |
+| 4 | Deterministic policy engine (12 rules; 13th added in Phase 5) | ✅ complete |
+| 5 | Authorization endpoint: agent auth, idempotency, replay, voucher | ✅ complete |
 | 6 | Hash-chained audit trail + `/verify` + tamper demo | ⬜ |
 | 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ⬜ |
 | 8 | Dashboard **and** reports (FREE-AI coverage, STR draft, DPDP register) | ⬜ |
@@ -109,41 +109,66 @@ PostgreSQL 16.15 via Homebrew (`brew services`), database `atl_india_dev`.
 
 ---
 
-## Next work unit — Phase 4: the policy engine
+## Added in Phase 5
 
-Write the before-half of `Understanding/PHASE_04_policy_engine.md` first.
+```
+apps/api/src/
+  auth/signing.ts          canonical signing string, Ed25519 verify, freshness
+  middleware/agent-auth.ts preHandler: headers, freshness, credential, signature
+  voucher/voucher.ts       HMAC-SHA256 capability token; jti derived per decision
+  repositories/credential.ts  key lookup + last_used_at telemetry
+  repositories/spend.ts    FOR UPDATE lock, timezone-aware windows, spend query
+  repositories/authorization.ts  request/decision/rule/risk writes; replay read
+  providers/risk.ts        RiskProvider + MockRiskProvider (SIMULATED) + Null
+  dto/authorization.ts     Zod strictObject wire schemas
+  routes/authorize.ts      POST /v1/authorize
+  demo/authorize-demo.ts   live demo over a real socket with real signatures
+  policy/rules.ts          + MANDATE_AGENT_MATCH (rule 1); ENGINE_VERSION v2
+```
 
-**This is the heart of the product** and the best engineering lesson in the
-project: a pure, deterministic function that takes a mandate version, a
-request, current spend, a clock reading and a risk signal, and returns a typed
-`Decision` with a per-rule breakdown.
+**Verified working:** 448 tests green, `tsc --noEmit` clean, **no new
+migration** (every column was designed in Phase 2), and the whole flow exercised
+live over real HTTP with real Ed25519 signatures — PASS with a verifiable
+voucher, four distinct BLOCK reasons, an idempotent replay returning the same
+decision id, and a one-digit body tamper rejected with 401.
 
-1. **Pure functions.** The engine takes NO `Date.now()`, no database handle,
-   no network. Time and state are passed in. That is what makes it
-   deterministic, replayable and testable without infrastructure.
-2. **Seven rules**, each emitting `Signal → Rule → Evaluation → Verdict →
-   Reason` as a typed record produced by code — never prose from a model.
-   Per-txn limit · window limit · merchant allowlist · category (MCC) ·
-   velocity · expiry · revocation. Risk is advisory input only.
-3. **Boundary-value tests** on every limit: `==`, `+1`, `-1`.
-4. **Exhaustive `switch` over `Verdict`** so the compiler catches an unhandled
-   case.
-5. **The reason must contain numbers** — "exceeds the ₹2,000 limit by ₹4,200",
-   not "limit exceeded".
-6. **The time-window rule needs timezone conversion** (`mandate_versions.timezone`
-   is stored for exactly this): "08:00–20:00" is user-local, storage is UTC.
-7. **The correction the research got wrong:** `MANDATE_PER_TXN_LIMIT` (user-set)
-   and `AFA_EXEMPTION_THRESHOLD` (regulatory, NPCI UPI/OC-151A) are two
-   different rules with two different owners. Ours enforces the first and only
-   records the second.
+**Two positive controls were run and both failed as required:** breaking
+`MANDATE_AGENT_MATCH` failed 4 tests; removing `FOR UPDATE` failed the
+concurrency test. A concurrency test that cannot fail is not evidence.
+
+---
+
+## Next work unit — Phase 6: the tamper-evident audit trail
+
+Write the before-half of `Understanding/PHASE_06_audit_trail.md` first.
+
+The chain already exists (Phase 3 `audit/writer.ts`) and now carries real
+authorization decisions. Phase 6 makes it **provable**:
+
+1. **A verifier** that walks a chain and recomputes every hash with the SAME
+   `computeEventHash` the writer uses. Two implementations would eventually
+   disagree, and the disagreement would look like tampering.
+2. **`GET /v1/audit/verify`** returning intact/broken plus the first bad `seq`.
+3. **A tamper demonstration** — modify an old event as the OWNER (the app role
+   cannot), then show verification failing and naming the row. This is the
+   buildathon moment described in `CLAUDE.md` section 12.
+4. **Signed checkpoints**, so a full-chain rewrite by a superuser is also
+   detectable. Raises the bar; does not eliminate the threat.
+5. **The claim ceiling stays `tamper-evident`.** A hash chain *detects*
+   modification; it does not prevent someone with superuser rights from
+   rewriting the whole chain.
 
 Owed from earlier phases: `EXPLAIN ANALYZE` on `loadForAuthorization` and the
-Phase 2 spend query, with real row counts.
+spend query, with real row counts.
 
 ## Documentation structure — SETTLED
 
-`Understanding/` is **canonical**, with the **13-phase plan (0–12)** listed
-above. Its `PHASE_xx` files are the ones to read and to write.
+`Understanding/` is **canonical**. Its `PHASE_xx` files are the ones to read and
+to write, and they follow the **nine-phase roadmap in the table above**
+(ADR-0014). Phases 0–6 kept their original numbers, so every existing
+`PHASE_00`–`PHASE_06` reference remains correct; only the unbuilt tail was
+reshaped. An earlier version of this paragraph still said "13-phase plan", which
+contradicted the table — corrected 2026-09-05.
 
 `Concepts Learning and Understanding/` is a parallel 10-phase rewrite that was
 added later. It is **not** the plan we follow; where the two disagree about
@@ -168,9 +193,17 @@ phase numbering, `Understanding/` wins. Do not resume work from it.
 - `docker-compose.yml` is committed but has never been run (ADR-0004).
 - No CI yet; no linter configured yet (ESLint arrives with Phase 11 hardening,
   or sooner if churn justifies it).
-- **Read endpoints are unauthenticated**, and the admin key is one shared
-  secret with no rotation or per-caller identity — so `createdBy` records a
-  *claim* about who acted, not a verified identity. Phase 5 fixes this.
+- **Read endpoints are unauthenticated**, and the mandate-mutation admin key is
+  one shared secret with no rotation or per-caller identity — so `createdBy`
+  records a *claim* about who acted, not a verified identity. Phase 5 fixed this
+  for `POST /v1/authorize` (real Ed25519 signatures); mandate mutation needs
+  user sessions with RBAC, which is Phase 9.
+- `authorization_requests.signature_verified` **can only ever be true**, because
+  a failed-signature request cannot satisfy that row's foreign keys. Rejections
+  are recorded in the audit chain instead. See PHASE_05 §12.
+- **No rate limiting.** A valid credential can make unlimited requests. Each
+  takes a row lock on its own mandate, so an agent degrades only its own
+  throughput — bounded, but Phase 9 work.
 - `appendAuditEvent` cannot verify it is inside a transaction; enforced by
   documentation and the `txClient` parameter name.
 - Route and audit tests permanently add rows (those tables are append-only by

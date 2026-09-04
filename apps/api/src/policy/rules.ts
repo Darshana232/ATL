@@ -45,13 +45,45 @@ function evaluation(
 }
 
 /* ------------------------------------------------------------------------ */
-/* 1. Is the mandate still in force at all?                                 */
+/* 1. Identity: is this agent even the one this mandate authorises?         */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * The authenticated caller must be the agent the mandate was granted to.
+ *
+ * Runs FIRST because identity precedes every other question: an agent that has
+ * no business holding this mandate should be told exactly that, not "you are
+ * outside your time window".
+ *
+ * `attempt.agentId` comes from signature verification, NEVER from the request
+ * body - otherwise the check compares a claim against a claim.
+ *
+ * This lives in the engine rather than in the route on purpose. A 403 at the
+ * route would be simpler and would leave no rule evaluation, no decision and
+ * nothing to count. See PHASE_05 section 5.
+ */
+export const mandateAgentMatch: Rule = ({ mandate, attempt }) => {
+  const matches = mandate.agentId === attempt.agentId;
+
+  return evaluation('MANDATE_AGENT_MATCH', 1, matches ? 'PASS' : 'BLOCK', {
+    signal: `authenticated agent is ${attempt.agentId}`,
+    expected: mandate.agentId,
+    actual: attempt.agentId,
+    reason: matches
+      ? `Agent ${attempt.agentId} is the agent this mandate authorises.`
+      : `This mandate authorises agent ${mandate.agentId}, but the request was ` +
+        `signed by ${attempt.agentId}. A mandate is not transferable between agents.`,
+  });
+};
+
+/* ------------------------------------------------------------------------ */
+/* 2. Is the mandate still in force at all?                                 */
 /* ------------------------------------------------------------------------ */
 
 export const mandateRevoked: Rule = ({ mandate }) => {
   const revoked = mandate.status === 'revoked';
 
-  return evaluation('MANDATE_REVOKED', 1, revoked ? 'BLOCK' : 'PASS', {
+  return evaluation('MANDATE_REVOKED', 2, revoked ? 'BLOCK' : 'PASS', {
     signal: `mandate status is ${mandate.status}`,
     expected: 'active',
     actual: mandate.status,
@@ -65,7 +97,7 @@ export const mandateRevoked: Rule = ({ mandate }) => {
 export const mandateNotYetValid: Rule = ({ version, now }) => {
   const tooEarly = isNotYetValidAt(version.terms, now);
 
-  return evaluation('MANDATE_NOT_YET_VALID', 2, tooEarly ? 'BLOCK' : 'PASS', {
+  return evaluation('MANDATE_NOT_YET_VALID', 3, tooEarly ? 'BLOCK' : 'PASS', {
     signal: `now is ${now.toISOString()}`,
     expected: `at or after ${version.terms.validFrom.toISOString()}`,
     actual: now.toISOString(),
@@ -81,7 +113,7 @@ export const mandateNotYetValid: Rule = ({ version, now }) => {
 export const mandateExpiry: Rule = ({ version, now }) => {
   const expired = isExpiredAt(version.terms, now);
 
-  return evaluation('MANDATE_EXPIRY', 3, expired ? 'BLOCK' : 'PASS', {
+  return evaluation('MANDATE_EXPIRY', 4, expired ? 'BLOCK' : 'PASS', {
     signal: `now is ${now.toISOString()}`,
     expected: `at or before ${version.terms.validTo.toISOString()}`,
     actual: now.toISOString(),
@@ -92,7 +124,7 @@ export const mandateExpiry: Rule = ({ version, now }) => {
 };
 
 /* ------------------------------------------------------------------------ */
-/* 2. Amounts                                                               */
+/* 3. Amounts                                                               */
 /* ------------------------------------------------------------------------ */
 
 export const perTransactionLimit: Rule = ({ version, attempt }) => {
@@ -103,7 +135,7 @@ export const perTransactionLimit: Rule = ({ version, attempt }) => {
   const exceeds = amount > limit;
   const overBy = amount - limit;
 
-  return evaluation('MANDATE_PER_TXN_LIMIT', 4, exceeds ? 'BLOCK' : 'PASS', {
+  return evaluation('MANDATE_PER_TXN_LIMIT', 5, exceeds ? 'BLOCK' : 'PASS', {
     signal: `requested ${amount} paise`,
     expected: `<= ${limit} paise`,
     actual: `${amount} paise`,
@@ -126,7 +158,7 @@ export const windowSpendLimit: Rule = ({ version, attempt, spend }) => {
   const overBy = total - limit;
   const window = version.terms.windowKind;
 
-  return evaluation('MANDATE_WINDOW_LIMIT', 5, exceeds ? 'BLOCK' : 'PASS', {
+  return evaluation('MANDATE_WINDOW_LIMIT', 6, exceeds ? 'BLOCK' : 'PASS', {
     signal: `${already} paise already spent this ${window}, requesting ${attempt.amountPaise} more`,
     expected: `<= ${limit} paise per ${window}`,
     actual: `${total} paise`,
@@ -142,7 +174,7 @@ export const windowSpendLimit: Rule = ({ version, attempt, spend }) => {
 };
 
 /* ------------------------------------------------------------------------ */
-/* 3. Scope: who and what                                                   */
+/* 4. Scope: who and what                                                   */
 /* ------------------------------------------------------------------------ */
 
 export const merchantAllowlist: Rule = ({ version, attempt }) => {
@@ -160,7 +192,7 @@ export const merchantAllowlist: Rule = ({ version, attempt }) => {
       : `${attempt.merchantId} is not on this mandate's merchant allowlist ` +
         `(${allowlist.join(', ')}).`;
 
-  return evaluation('MERCHANT_ALLOWLIST', 6, allowed ? 'PASS' : 'BLOCK', {
+  return evaluation('MERCHANT_ALLOWLIST', 7, allowed ? 'PASS' : 'BLOCK', {
     signal: `merchant is ${attempt.merchantId}`,
     expected: allowlist.length === 0 ? '(empty allowlist: nothing permitted)' : allowlist.join(', '),
     actual: attempt.merchantId,
@@ -174,7 +206,7 @@ export const categoryBlocklist: Rule = ({ version, attempt }) => {
   // Keyed on MCC rather than a product name or category string: a four-digit
   // code assigned to the merchant is far harder to game than free text an
   // agent or a merchant can write.
-  return evaluation('CATEGORY_BLOCKLIST', 7, blocked ? 'BLOCK' : 'PASS', {
+  return evaluation('CATEGORY_BLOCKLIST', 8, blocked ? 'BLOCK' : 'PASS', {
     signal: `merchant category code is ${attempt.merchantMcc}`,
     expected:
       version.terms.blockedMccs.length === 0
@@ -190,7 +222,7 @@ export const categoryBlocklist: Rule = ({ version, attempt }) => {
 export const paymentMethodAllowed: Rule = ({ version, attempt }) => {
   const allowed = version.terms.paymentMethods.includes(attempt.paymentMethod);
 
-  return evaluation('PAYMENT_METHOD_ALLOWED', 10, allowed ? 'PASS' : 'BLOCK', {
+  return evaluation('PAYMENT_METHOD_ALLOWED', 11, allowed ? 'PASS' : 'BLOCK', {
     signal: `payment method is ${attempt.paymentMethod}`,
     expected: version.terms.paymentMethods.join(', '),
     actual: attempt.paymentMethod,
@@ -202,7 +234,7 @@ export const paymentMethodAllowed: Rule = ({ version, attempt }) => {
 };
 
 /* ------------------------------------------------------------------------ */
-/* 4. Context: when and how often                                           */
+/* 5. Context: when and how often                                           */
 /* ------------------------------------------------------------------------ */
 
 export const timeWindow: Rule = ({ version, now }) => {
@@ -220,7 +252,7 @@ export const timeWindow: Rule = ({ version, now }) => {
   // weekday genuinely changes with the zone - 18:30Z is Monday in UTC and
   // Tuesday in Asia/Kolkata - so a UTC weekday check would apply the wrong
   // day's rule for several hours every day.
-  return evaluation('TIME_WINDOW', 8, inside ? 'PASS' : 'BLOCK', {
+  return evaluation('TIME_WINDOW', 9, inside ? 'PASS' : 'BLOCK', {
     signal: `local time is ${localText}`,
     expected: windowText,
     actual: localText,
@@ -239,7 +271,7 @@ export const velocityLimit: Rule = ({ version, spend }) => {
   // If the limit is 5 and 5 have completed, this one would be the sixth.
   const exceeds = completed >= limit;
 
-  return evaluation('VELOCITY_LIMIT', 9, exceeds ? 'BLOCK' : 'PASS', {
+  return evaluation('VELOCITY_LIMIT', 10, exceeds ? 'BLOCK' : 'PASS', {
     signal: `${completed} transactions in the last hour`,
     expected: `< ${limit} per hour`,
     actual: `${completed}`,
@@ -251,7 +283,7 @@ export const velocityLimit: Rule = ({ version, spend }) => {
 };
 
 /* ------------------------------------------------------------------------ */
-/* 5. Informational and advisory - neither can block                        */
+/* 6. Informational and advisory - neither can block                        */
 /* ------------------------------------------------------------------------ */
 
 /**
@@ -270,7 +302,7 @@ export const afaExemptionThreshold: Rule = ({ version, attempt }) => {
   const threshold = version.terms.afaExemptionThresholdPaise;
   const above = attempt.amountPaise > threshold;
 
-  return evaluation('AFA_EXEMPTION_THRESHOLD', 11, 'PASS', {
+  return evaluation('AFA_EXEMPTION_THRESHOLD', 12, 'PASS', {
     signal: `requested ${attempt.amountPaise} paise`,
     expected: `informational only (AFA-exempt ceiling ${threshold} paise)`,
     actual: `${attempt.amountPaise} paise`,
@@ -295,7 +327,7 @@ export const riskSignal: Rule = ({ risk }) => {
   if (risk === null) {
     // SKIP, not PASS: "no provider answered" is different from "a provider said
     // this is fine", and an audit trail must keep them distinguishable.
-    return evaluation('RISK_SIGNAL', 12, 'SKIP', {
+    return evaluation('RISK_SIGNAL', 13, 'SKIP', {
       signal: 'no risk signal available',
       expected: 'advisory input, if any provider responded',
       actual: 'none',
@@ -305,7 +337,7 @@ export const riskSignal: Rule = ({ risk }) => {
 
   const flagged = risk.band === 'HIGH';
 
-  return evaluation('RISK_SIGNAL', 12, flagged ? 'FLAG' : 'PASS', {
+  return evaluation('RISK_SIGNAL', 13, flagged ? 'FLAG' : 'PASS', {
     signal: `risk score ${risk.score} (${risk.band}) from ${risk.provider}`,
     expected: 'advisory only; cannot block',
     actual: `${risk.score} (${risk.band})`,
@@ -326,6 +358,7 @@ export const riskSignal: Rule = ({ risk }) => {
  * A revoked mandate should say "revoked", not "outside your time window".
  */
 export const ALL_RULES: readonly Rule[] = [
+  mandateAgentMatch,
   mandateRevoked,
   mandateNotYetValid,
   mandateExpiry,
