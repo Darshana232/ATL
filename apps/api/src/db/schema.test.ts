@@ -556,6 +556,545 @@ describe('merchant allowlist integrity', () => {
   });
 });
 
+/* ------------------------------------------------------------------------ */
+/* Fixtures for the authorization chain: request -> decision -> payment.    */
+/* ------------------------------------------------------------------------ */
+
+/** Baseline + version 1 + allowlist. Returns nothing; ids are fixed. */
+async function seedThroughVersion(client: pg.PoolClient): Promise<void> {
+  await seedBaseline(client);
+  await insertVersion(client, { version: 1 });
+  await client.query(
+    `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
+     VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+  );
+}
+
+async function insertRequest(
+  client: pg.PoolClient,
+  overrides: Record<string, unknown> = {},
+): Promise<DbError | null> {
+  const values: Record<string, unknown> = {
+    id: 'authz_test',
+    mandate_id: 'mnd_test',
+    mandate_version: 1,
+    agent_id: 'agt_test',
+    signature_verified: true,
+    merchant_id: 'mer_bigbasket',
+    amount_paise: 124000, // ₹1,240
+    payment_method: 'upi_reserve_pay',
+    idempotency_key: 'idem_test_000001',
+    request_id: 'req_00000001',
+    ...overrides,
+  };
+  const columns = Object.keys(values);
+  return captureError(
+    client,
+    `INSERT INTO authorization_requests (${columns.join(', ')})
+     VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})`,
+    Object.values(values),
+  );
+}
+
+async function insertDecision(
+  client: pg.PoolClient,
+  overrides: Record<string, unknown> = {},
+): Promise<DbError | null> {
+  const values: Record<string, unknown> = {
+    id: 'dec_test',
+    authorization_request_id: 'authz_test',
+    mandate_id: 'mnd_test',
+    mandate_version: 1,
+    verdict: 'PASS',
+    reason: 'Requested ₹1,240 is within the ₹2,000 per-transaction limit.',
+    engine_version: 'engine-v1',
+    spend_window_start: '2026-09-01T00:00:00Z',
+    spend_window_end: '2026-09-08T00:00:00Z',
+    spent_before_paise: 0,
+    ...overrides,
+  };
+  const columns = Object.keys(values);
+  return captureError(
+    client,
+    `INSERT INTO decisions (${columns.join(', ')})
+     VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})`,
+    Object.values(values),
+  );
+}
+
+async function insertPayment(
+  client: pg.PoolClient,
+  overrides: Record<string, unknown> = {},
+): Promise<DbError | null> {
+  const values: Record<string, unknown> = {
+    id: 'pay_test',
+    decision_id: 'dec_test',
+    mandate_id: 'mnd_test',
+    voucher_jti: 'vch_0123456789abcdef',
+    amount_paise: 124000,
+    provider: 'mock_upi',
+    ...overrides,
+  };
+  const columns = Object.keys(values);
+  return captureError(
+    client,
+    `INSERT INTO payments (${columns.join(', ')})
+     VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})`,
+    Object.values(values),
+  );
+}
+
+/* ======================================================================== */
+describe('idempotency prevents a retry becoming a second charge', () => {
+  it('REFUSES a duplicate idempotency key for the same agent', async () => {
+    // A network retry must not create a second authorization. This UNIQUE
+    // constraint - not application logic - is what guarantees it.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      expect(await insertRequest(client, { id: 'authz_one' })).toBeNull();
+
+      const error = await insertRequest(client, { id: 'authz_two' });
+
+      expect(error?.code).toBe(SQLSTATE.UNIQUE_VIOLATION);
+      expect(error?.constraint).toBe('authorization_requests_idempotent_per_agent');
+    });
+  });
+
+  it('ALLOWS the same key from a different agent', async () => {
+    // Idempotency is scoped per agent: two agents may legitimately pick the
+    // same key, and one must not be able to squat another's key space.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await client.query(
+        `INSERT INTO agents (id, display_name, vendor, agent_version)
+         VALUES ('agt_other', 'Other', 'openai', '1.0.0')`,
+      );
+      await insertRequest(client, { id: 'authz_one' });
+
+      const error = await insertRequest(client, { id: 'authz_two', agent_id: 'agt_other' });
+      expect(error).toBeNull();
+    });
+  });
+
+  it('records a request whose signature FAILED', async () => {
+    // A rejected-signature attempt is exactly what a security review counts.
+    // It must be storable, not discarded.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      expect(await insertRequest(client, { signature_verified: false })).toBeNull();
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('decisions', () => {
+  it('REFUSES a second decision for the same request', async () => {
+    // Two decisions for one request would make "what did we decide?"
+    // ambiguous, which is unanswerable in a dispute.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+
+      const error = await insertDecision(client, { id: 'dec_second' });
+      expect(error?.code).toBe(SQLSTATE.UNIQUE_VIOLATION);
+    });
+  });
+
+  it('REFUSES an unknown verdict', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+
+      const error = await insertDecision(client, { verdict: 'MAYBE' });
+      expect(error?.constraint).toBe('decisions_verdict_valid');
+    });
+  });
+
+  it('REFUSES a risk score without its provider', async () => {
+    // A score with no provider cannot be interpreted or re-checked later.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+
+      const error = await insertDecision(client, { risk_score: 42 });
+      expect(error?.constraint).toBe('decisions_risk_complete');
+    });
+  });
+
+  it('distinguishes "no risk signal" from "score 0"', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      expect(await insertDecision(client, { risk_score: 0, risk_provider: 'mock' })).toBeNull();
+
+      const { rows } = await client.query<{ risk_score: number | null }>(
+        `SELECT risk_score FROM decisions WHERE id = 'dec_test'`,
+      );
+      expect(rows[0]?.risk_score).toBe(0); // not null, and not conflated with absence
+    });
+  });
+
+  it('is append-only', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+
+      const updated = await captureError(
+        client,
+        `UPDATE decisions SET verdict='PASS' WHERE id='dec_test'`,
+      );
+      expect(updated?.code).toBe(SQLSTATE.APPEND_ONLY);
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('rule_evaluations are the explainability record', () => {
+  async function insertRule(
+    client: pg.PoolClient,
+    overrides: Record<string, unknown> = {},
+  ): Promise<DbError | null> {
+    const values: Record<string, unknown> = {
+      decision_id: 'dec_test',
+      rule_code: 'MANDATE_PER_TXN_LIMIT',
+      sequence: 1,
+      verdict: 'PASS',
+      signal: 'requested 124000 paise',
+      expected: '<= 200000 paise',
+      actual: '124000 paise',
+      reason: 'Requested ₹1,240 is within the ₹2,000 per-transaction limit.',
+      observed_paise: 124000,
+      limit_paise: 200000,
+      ...overrides,
+    };
+    const columns = Object.keys(values);
+    return captureError(
+      client,
+      `INSERT INTO rule_evaluations (${columns.join(', ')})
+       VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})`,
+      Object.values(values),
+    );
+  }
+
+  it('records passing rules too, so we can prove a check ran', async () => {
+    // Recording only failures leaves us unable to demonstrate that a check
+    // was performed at all - which is precisely what an auditor asks.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+
+      expect(await insertRule(client, { rule_code: 'MANDATE_PER_TXN_LIMIT' })).toBeNull();
+      expect(await insertRule(client, { rule_code: 'MERCHANT_ALLOWLIST', sequence: 2 })).toBeNull();
+      expect(await insertRule(client, { rule_code: 'MANDATE_EXPIRY', sequence: 3 })).toBeNull();
+    });
+  });
+
+  it('allows SKIP as a real outcome', async () => {
+    // A velocity rule cannot run if the mandate sets no velocity limit, and
+    // silence would be indistinguishable from a pass.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+
+      expect(
+        await insertRule(client, {
+          rule_code: 'VELOCITY_LIMIT',
+          verdict: 'SKIP',
+          observed_paise: null,
+          limit_paise: null,
+        }),
+      ).toBeNull();
+    });
+  });
+
+  it('keeps machine-readable amounts so a report need not parse English', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+      await insertRule(client, { observed_paise: 620000, limit_paise: 200000, verdict: 'BLOCK' });
+
+      // "breached by ₹4,200" computed in SQL, not scraped from a sentence.
+      const { rows } = await client.query<{ breach_paise: number }>(
+        `SELECT observed_paise - limit_paise AS breach_paise
+           FROM rule_evaluations WHERE decision_id = 'dec_test'`,
+      );
+      expect(rows[0]?.breach_paise).toBe(420000);
+    });
+  });
+
+  it('REFUSES a lowercase rule code', async () => {
+    // Rule codes are grouped in reports; inconsistent casing splits a group
+    // in two and quietly halves a count.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+
+      const error = await insertRule(client, { rule_code: 'mandate_per_txn_limit' });
+      expect(error?.constraint).toBe('rule_evaluations_rule_code_format');
+    });
+  });
+
+  it('REFUSES the same rule twice for one decision', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+      await insertRule(client);
+
+      const error = await insertRule(client, { sequence: 2 });
+      expect(error?.code).toBe(SQLSTATE.UNIQUE_VIOLATION);
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('risk signals are structurally advisory', () => {
+  it('REFUSES a signal marked non-advisory', async () => {
+    // Risk can raise a FLAG; it can never override a BLOCK or create a PASS.
+    // Making risk authoritative should require a migration and a review, not
+    // one line in a service.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+
+      const error = await captureError(
+        client,
+        `INSERT INTO risk_signals (id, authorization_request_id, provider, score, band, is_advisory)
+         VALUES ('rsk_test', 'authz_test', 'mock', 90, 'HIGH', false)`,
+      );
+
+      expect(error?.constraint).toBe('risk_signals_always_advisory');
+    });
+  });
+
+  it('accepts an advisory signal with reasons', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+
+      const error = await captureError(
+        client,
+        `INSERT INTO risk_signals (id, authorization_request_id, provider, score, band, reasons, latency_ms)
+         VALUES ('rsk_test', 'authz_test', 'mock', 12, 'LOW',
+                 ARRAY['no prior disputes','amount within historical range'], 4)`,
+      );
+
+      expect(error).toBeNull();
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('payments: the voucher is single-use BY CONSTRAINT', () => {
+  it('accepts the first capture of a voucher', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+
+      expect(await insertPayment(client)).toBeNull();
+    });
+  });
+
+  it('REFUSES replaying the same voucher jti', async () => {
+    // THE security guarantee. Even if an attacker captures a valid voucher and
+    // replays it within its 60-second lifetime, and even if two captures race
+    // perfectly, the unique index means only one row can exist.
+    //
+    // Application-level "have we seen this jti?" logic loses that race.
+    // A unique index does not.
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+      await insertPayment(client, { id: 'pay_first' });
+
+      // A different decision, deliberately - proving the jti alone blocks it.
+      await insertRequest(client, { id: 'authz_2', idempotency_key: 'idem_test_000002' });
+      await insertDecision(client, { id: 'dec_2', authorization_request_id: 'authz_2' });
+
+      const error = await insertPayment(client, {
+        id: 'pay_replay',
+        decision_id: 'dec_2',
+        voucher_jti: 'vch_0123456789abcdef', // same voucher
+      });
+
+      expect(error?.code).toBe(SQLSTATE.UNIQUE_VIOLATION);
+      expect(error?.constraint).toBe('payments_voucher_jti_key');
+    });
+  });
+
+  it('REFUSES two payments for one decision', async () => {
+    await withRollback(async (client) => {
+      await seedThroughVersion(client);
+      await insertRequest(client);
+      await insertDecision(client);
+      await insertPayment(client, { id: 'pay_first' });
+
+      const error = await insertPayment(client, {
+        id: 'pay_second',
+        voucher_jti: 'vch_fedcba9876543210',
+      });
+
+      expect(error?.code).toBe(SQLSTATE.UNIQUE_VIOLATION);
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('payment state machine is enforced by the database', () => {
+  async function seedPayment(client: pg.PoolClient): Promise<void> {
+    await seedThroughVersion(client);
+    await insertRequest(client);
+    await insertDecision(client);
+    await insertPayment(client);
+  }
+
+  it('allows the legal path created -> authorized -> captured', async () => {
+    await withRollback(async (client) => {
+      await seedPayment(client);
+
+      expect(
+        await captureError(
+          client,
+          `UPDATE payments SET status='authorized', authorized_at=now() WHERE id='pay_test'`,
+        ),
+      ).toBeNull();
+
+      expect(
+        await captureError(
+          client,
+          `UPDATE payments SET status='captured', captured_at=now() WHERE id='pay_test'`,
+        ),
+      ).toBeNull();
+    });
+  });
+
+  it('REFUSES skipping authorization (created -> captured)', async () => {
+    await withRollback(async (client) => {
+      await seedPayment(client);
+
+      const error = await captureError(
+        client,
+        `UPDATE payments SET status='captured', captured_at=now() WHERE id='pay_test'`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.ILLEGAL_TRANSITION);
+      expect(error?.message).toMatch(/illegal payment transition: created -> captured/);
+    });
+  });
+
+  it('REFUSES going backwards from captured', async () => {
+    // A record that says money moved must never be able to say it did not.
+    await withRollback(async (client) => {
+      await seedPayment(client);
+      await client.query(
+        `UPDATE payments SET status='authorized', authorized_at=now() WHERE id='pay_test'`,
+      );
+      await client.query(
+        `UPDATE payments SET status='captured', captured_at=now() WHERE id='pay_test'`,
+      );
+
+      const error = await captureError(
+        client,
+        `UPDATE payments SET status='created' WHERE id='pay_test'`,
+      );
+      expect(error?.code).toBe(SQLSTATE.ILLEGAL_TRANSITION);
+    });
+  });
+
+  it('treats failed as terminal', async () => {
+    await withRollback(async (client) => {
+      await seedPayment(client);
+      await client.query(
+        `UPDATE payments SET status='failed', failed_at=now(),
+                failure_code='insufficient_funds', failure_reason='payer balance too low'
+          WHERE id='pay_test'`,
+      );
+
+      const error = await captureError(
+        client,
+        `UPDATE payments SET status='authorized', authorized_at=now() WHERE id='pay_test'`,
+      );
+      expect(error?.code).toBe(SQLSTATE.ILLEGAL_TRANSITION);
+    });
+  });
+
+  it('REFUSES a failure with no explanation', async () => {
+    // "It failed" is not a reconcilable record.
+    await withRollback(async (client) => {
+      await seedPayment(client);
+
+      const error = await captureError(
+        client,
+        `UPDATE payments SET status='failed', failed_at=now() WHERE id='pay_test'`,
+      );
+      expect(error?.constraint).toBe('payments_failure_explained');
+    });
+  });
+
+  it('REFUSES a captured payment with no captured_at', async () => {
+    await withRollback(async (client) => {
+      await seedPayment(client);
+      await client.query(
+        `UPDATE payments SET status='authorized', authorized_at=now() WHERE id='pay_test'`,
+      );
+
+      const error = await captureError(
+        client,
+        `UPDATE payments SET status='captured' WHERE id='pay_test'`,
+      );
+      expect(error?.constraint).toBe('payments_captured_timestamped');
+    });
+  });
+
+  it('REFUSES changing the amount or the voucher after creation', async () => {
+    // Otherwise a captured payment could claim a different authorisation than
+    // the one that actually permitted it.
+    await withRollback(async (client) => {
+      await seedPayment(client);
+
+      const amount = await captureError(
+        client,
+        `UPDATE payments SET amount_paise=999999 WHERE id='pay_test'`,
+      );
+      expect(amount?.code).toBe(SQLSTATE.ILLEGAL_TRANSITION);
+      expect(amount?.message).toMatch(/immutable/i);
+
+      const voucher = await captureError(
+        client,
+        `UPDATE payments SET voucher_jti='vch_aaaaaaaaaaaaaaaa' WHERE id='pay_test'`,
+      );
+      expect(voucher?.code).toBe(SQLSTATE.ILLEGAL_TRANSITION);
+    });
+  });
+
+  it('labels simulated settlements honestly in the data', async () => {
+    // 'mock_upi' is on the row, so no report can accidentally present a
+    // simulated settlement as a real one.
+    await withRollback(async (client) => {
+      await seedPayment(client);
+      const { rows } = await client.query<{ provider: string }>(
+        `SELECT provider FROM payments WHERE id='pay_test'`,
+      );
+      expect(rows[0]?.provider).toBe('mock_upi');
+
+      const bogus = await insertPayment(client, {
+        id: 'pay_bogus',
+        decision_id: 'dec_test',
+        provider: 'npci_production',
+      });
+      expect(bogus?.constraint).toBe('payments_provider_valid');
+    });
+  });
+});
+
 /* ======================================================================== */
 describe('money columns round-trip exactly', () => {
   it('stores and returns paise as an exact integer', async () => {

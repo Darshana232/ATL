@@ -507,7 +507,32 @@ Fixed by using `cardinality()`, which returns 0 for an empty array.
 empty. This is the single most common source of constraints that quietly do
 nothing.
 
-**Meta-observation across mistakes 3–5.** Mistake 3 changed the tests to assert
+**6. An early return made a security guard unreachable.** The payment trigger
+was written as:
+
+```plpgsql
+IF NEW.status = OLD.status THEN
+  RETURN NEW;                      -- no transition, nothing to check
+END IF;
+...
+IF NEW.amount_paise <> OLD.amount_paise THEN  -- UNREACHABLE
+```
+
+The immutability guard sat *after* the early return, so it never ran when the
+status was unchanged — which is precisely the case it existed for. A quiet
+`UPDATE payments SET amount_paise = 999999` does not change the status, so it
+sailed through. The guard was dead code in the only scenario that mattered.
+
+*Why it happened:* I structured the trigger around its main job (validating
+transitions) and appended the immutability check as an afterthought, without
+re-reading the control flow above it.
+*Lesson:* **guard ordering is a correctness property, not style.** An early
+return silently disables every check below it. When adding a check to an
+existing function, trace the paths that reach it — do not assume the bottom of
+a function is always reached. Caught only because the test asserted `ATL02`
+rather than "some error".
+
+**Meta-observation across mistakes 3–6.** Mistake 3 changed the tests to assert
 specific SQLSTATEs and constraint names, and that change immediately paid for
 itself twice: the `TRUNCATE` test would have "passed" against the wrong error
 code, and the empty-weekday bug was only visible because the assertion named
