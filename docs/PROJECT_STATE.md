@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-05 · **Current phase:** 3 complete, 4 not started
+**Last updated:** 2026-09-05 · **Current phase:** 4 complete, 5 not started
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -25,7 +25,7 @@ product. Consolidated from thirteen on 2026-09-05 — see **ADR-0014**. Phases
 | 1 | Foundation: workspace, config, logging, DB pool, migrations, health | ✅ complete |
 | 2 | Full core schema + least-privilege role + seed data | ✅ complete |
 | 3 | Mandate domain, DTOs, repository, audit writer, mandate API | ✅ complete |
-| 4 | Deterministic policy engine (7 rules) | ⬜ next |
+| 4 | Deterministic policy engine (12 rules) | ✅ complete |
 | 5 | Authorization endpoint: agent auth, HMAC, idempotency, replay, voucher | ⬜ |
 | 6 | Hash-chained audit trail + `/verify` + tamper demo | ⬜ |
 | 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ⬜ |
