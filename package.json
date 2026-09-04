@@ -1,0 +1,25 @@
+{
+  "name": "atl-india",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ATL-India - Agentic Trust & Compliance Layer for agent-initiated UPI payments. Buildathon MVP: Razorpay-inspired architecture with simulated mandate rails and real Razorpay test-mode payments.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev -w apps/api",
+    "migrate": "npm run migrate -w apps/api",
+    "db:start": "brew services start postgresql@16",
+    "db:stop": "brew services stop postgresql@16",
+    "db:psql": "psql atl_india_dev"
+  }
+}

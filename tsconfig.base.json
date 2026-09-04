@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    /* --- Language and module system ------------------------------------- */
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    /* --- Type safety ----------------------------------------------------
+       "strict" is the headline flag. The three below are NOT included in
+       "strict" and each closes a real class of production bug:
+         noUncheckedIndexedAccess  arr[0] is T | undefined, not T
+                                   (stops "cannot read property of undefined")
+         noFallthroughCasesInSwitch  a missing `break` becomes a compile error
+         noImplicitOverride        stops accidentally shadowing a base method
+    --------------------------------------------------------------------- */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    /* --- Output ---------------------------------------------------------- */
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    /* --- Ergonomics ------------------------------------------------------
+       skipLibCheck: don't type-check inside node_modules. Standard practice;
+       it cuts build time a lot and we cannot fix other people's types anyway.
+    --------------------------------------------------------------------- */
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

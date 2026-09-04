@@ -1,0 +1,39 @@
+# ===========================================================================
+# Alternative local database: PostgreSQL in a container.
+#
+# STATUS: committed for reproducibility (teammates, CI, and any machine that
+# has Docker) but NOT exercised on the primary dev machine, which uses
+# Homebrew postgresql@16 instead. See docs/DECISIONS.md ADR-0004.
+#
+# Usage where Docker is available:
+#   docker compose up -d db
+#   DATABASE_URL=postgres://atl:atl_dev_only@localhost:5432/atl_india_dev
+#   docker compose down          # stop, keep data
+#   docker compose down -v       # stop and DELETE the data volume
+# ===========================================================================
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: atl-india-db
+    restart: unless-stopped
+    environment:
+      # Development-only credentials. Real deployments inject these as secrets.
+      POSTGRES_USER: atl
+      POSTGRES_PASSWORD: atl_dev_only
+      POSTGRES_DB: atl_india_dev
+    ports:
+      # host:container - lets tools on your machine reach the container's 5432
+      - "5432:5432"
+    volumes:
+      # A named volume, so data survives `docker compose down`.
+      - atl_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # "the container is running" != "Postgres can accept queries".
+      # Same distinction our /v1/health endpoint makes.
+      test: ["CMD-SHELL", "pg_isready -U atl -d atl_india_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  atl_pgdata:

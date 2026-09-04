@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    /* Make Node's globals (process, Buffer, URL...) known to the compiler.
+       Without this, `process.env` is a type error. */
+    "types": ["node"]
+  },
+  /* Includes *.test.ts on purpose: tests are code and must type-check too. */
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}
