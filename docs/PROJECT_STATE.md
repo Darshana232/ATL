@@ -15,21 +15,26 @@ Two documentation sets, different audiences:
 
 ## Where we are
 
+**Nine build phases**, plus a Phase 0 prologue that was repo setup rather than
+product. Consolidated from thirteen on 2026-09-05 — see **ADR-0014**. Phases
+0–6 keep their original numbers, so existing references stay correct.
+
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Repo, docs, decision log | ✅ complete |
+| 0 | Repo, docs, decision log, research reality-check | ✅ complete |
 | 1 | Foundation: workspace, config, logging, DB pool, migrations, health | ✅ complete |
-| 2 | Full core schema + seed data | ✅ complete |
-| 3 | Mandate domain + API | ✅ complete |
+| 2 | Full core schema + least-privilege role + seed data | ✅ complete |
+| 3 | Mandate domain, DTOs, repository, audit writer, mandate API | ✅ complete |
 | 4 | Deterministic policy engine (7 rules) | ⬜ next |
-| 5 | Authorization endpoint: agent auth, HMAC, idempotency, voucher | ⬜ |
-| 6 | Hash-chained audit trail + verification + tamper demo | ⬜ |
-| 7 | Payment adapters (mock + Razorpay test) + webhooks | ⬜ |
-| 8 | Catalog + agent runtime + scoped tools + injection test | ⬜ |
-| 9 | Dashboard | ⬜ |
-| 10 | Reports (FREE-AI coverage, STR draft, DPDP register) + certification | ⬜ |
-| 11 | Security hardening + threat model | ⬜ |
-| 12 | Observability, CI, deploy, demo polish | ⬜ |
+| 5 | Authorization endpoint: agent auth, HMAC, idempotency, replay, voucher | ⬜ |
+| 6 | Hash-chained audit trail + `/verify` + tamper demo | ⬜ |
+| 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ⬜ |
+| 8 | Dashboard **and** reports (FREE-AI coverage, STR draft, DPDP register) | ⬜ |
+| 9 | Hardening: threat model, RBAC, rate limits, ESLint, CI, observability, deploy, demo | ⬜ |
+
+A plain-English companion to this roadmap — one file per phase, plus 67 concept
+cards and a file-by-file codebase tour — lives in
+`Concepts Learning and Understanding/`.
 
 ---
 
@@ -134,6 +139,15 @@ request, current spend, a clock reading and a risk signal, and returns a typed
 
 Owed from earlier phases: `EXPLAIN ANALYZE` on `loadForAuthorization` and the
 Phase 2 spend query, with real row counts.
+
+## Documentation structure — SETTLED
+
+`Understanding/` is **canonical**, with the **13-phase plan (0–12)** listed
+above. Its `PHASE_xx` files are the ones to read and to write.
+
+`Concepts Learning and Understanding/` is a parallel 10-phase rewrite that was
+added later. It is **not** the plan we follow; where the two disagree about
+phase numbering, `Understanding/` wins. Do not resume work from it.
 
 ## Standing constraints (do not re-litigate silently)
 
