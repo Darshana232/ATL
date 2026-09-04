@@ -22,7 +22,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type pg from 'pg';
-import { loadConfig, type Config } from '../config.js';
+import { adminDatabaseUrl, loadConfig, type Config } from '../config.js';
 import { createLogger } from '../logger.js';
 import { closePool, createPool, type Pool } from './pool.js';
 
@@ -32,7 +32,18 @@ const logger = createLogger(config);
 let pool: Pool;
 
 beforeAll(() => {
-  pool = createPool(config, logger);
+  /**
+   * Connects as the OWNER, not as the service's atl_app role.
+   *
+   * This file tests SCHEMA semantics - constraints, triggers, foreign keys -
+   * so it must reach them. As atl_app, an UPDATE on an append-only table is
+   * refused at the PERMISSION layer (42501) before any trigger runs, and we
+   * would never find out whether the trigger works.
+   *
+   * The complementary test - that the application role cannot do these things
+   * at all - lives in roles.test.ts. Two roles, two files, two guarantees.
+   */
+  pool = createPool(config, logger, adminDatabaseUrl(config));
 });
 
 afterAll(async () => {

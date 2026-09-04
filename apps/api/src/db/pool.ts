@@ -26,7 +26,16 @@ export type Pool = pg.Pool;
  */
 const MAX_CONNECTIONS = 10;
 
-export function createPool(config: Config, logger: Logger): Pool {
+/**
+ * @param connectionString overrides config.DATABASE_URL. Used by the migration
+ *        runner and by schema tests, which need the OWNER role; the service
+ *        itself always uses the default (the restricted atl_app role).
+ */
+export function createPool(
+  config: Config,
+  logger: Logger,
+  connectionString: string = config.DATABASE_URL,
+): Pool {
   /**
    * Must happen before any query runs. Installed here rather than in each
    * entrypoint so it cannot be forgotten: no pool exists without it.
@@ -34,7 +43,7 @@ export function createPool(config: Config, logger: Logger): Pool {
   registerPostgresTypeParsers();
 
   const pool = new pg.Pool({
-    connectionString: config.DATABASE_URL,
+    connectionString,
 
     max: MAX_CONNECTIONS,
 

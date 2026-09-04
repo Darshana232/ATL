@@ -52,6 +52,29 @@ const configSchema = z
         { message: 'must be a PostgreSQL URL starting with postgres:// or postgresql://' },
       ),
 
+    /**
+     * Connection string with OWNER privileges, used ONLY for migrations.
+     *
+     * The service itself connects as `atl_app` (DATABASE_URL above), which has
+     * no UPDATE or DELETE on any append-only table and cannot TRUNCATE or run
+     * DDL. Migrations need DDL, so they get a separate, more privileged
+     * credential - the standard production split.
+     *
+     * Optional: falls back to DATABASE_URL, which is fine when a single
+     * superuser account is used locally, and is warned about at migration time.
+     */
+    DATABASE_ADMIN_URL: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z
+        .string()
+        .min(1)
+        .refine(
+          (url) => url.startsWith('postgres://') || url.startsWith('postgresql://'),
+          { message: 'must be a PostgreSQL URL starting with postgres:// or postgresql://' },
+        )
+        .optional(),
+    ),
+
     /* --- Optional until the phase that needs them --------------------- */
 
     /** Phase 8: agent runtime. */
@@ -121,6 +144,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /**
+ * The connection string to use for schema migrations.
+ *
+ * Falls back to DATABASE_URL so a single-account local setup still works, but
+ * that fallback means the service and the migrator share privileges - which
+ * defeats the least-privilege design. Callers warn when they are equal.
+ */
+export function adminDatabaseUrl(config: Config): string {
+  return config.DATABASE_ADMIN_URL ?? config.DATABASE_URL;
+}
+
+/**
  * A version of the config that is safe to log.
  * Secrets are reduced to a boolean "is it set" - which is the only thing you
  * ever actually need at startup, and is not itself sensitive.
@@ -130,8 +164,12 @@ export function describeConfig(config: Config): Record<string, string | number |
     NODE_ENV: config.NODE_ENV,
     PORT: config.PORT,
     LOG_LEVEL: config.LOG_LEVEL,
-    // Host only. The full URL can embed a password.
+    // Host and user only. The full URL can embed a password.
     database: new URL(config.DATABASE_URL).host,
+    // Which role the SERVICE runs as. Worth seeing at startup: if this says
+    // the owner rather than atl_app, least privilege is not in effect.
+    databaseUser: new URL(config.DATABASE_URL).username || '(default)',
+    separateMigrationRole: config.DATABASE_ADMIN_URL !== undefined,
     anthropicKeySet: config.ANTHROPIC_API_KEY !== undefined,
     razorpayKeysSet: config.RAZORPAY_KEY_ID !== undefined && config.RAZORPAY_KEY_SECRET !== undefined,
     voucherSecretSet: config.VOUCHER_SIGNING_SECRET !== undefined,

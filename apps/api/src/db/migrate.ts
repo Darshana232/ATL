@@ -17,7 +17,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from '../env-file.js';
-import { loadConfig } from '../config.js';
+import { adminDatabaseUrl, loadConfig } from '../config.js';
 import { createLogger, type Logger } from '../logger.js';
 import { closePool, createPool, type Pool } from './pool.js';
 
@@ -151,7 +151,22 @@ async function main(): Promise<void> {
   loadEnvFile();
   const config = loadConfig();
   const logger = createLogger(config);
-  const pool = createPool(config, logger);
+
+  /**
+   * Migrations need DDL, so they connect as the OWNER - not as the restricted
+   * role the service uses at runtime (see migration 0005).
+   */
+  const adminUrl = adminDatabaseUrl(config);
+
+  if (config.DATABASE_ADMIN_URL === undefined) {
+    logger.warn(
+      'DATABASE_ADMIN_URL is not set, so migrations are running with the same ' +
+        'credentials as the service. Least privilege is not in effect: set ' +
+        'DATABASE_URL to the atl_app role and DATABASE_ADMIN_URL to the owner.',
+    );
+  }
+
+  const pool = createPool(config, logger, adminUrl);
 
   try {
     await runMigrations(pool, logger);
