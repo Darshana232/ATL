@@ -381,7 +381,33 @@ partitioning problem rather than a redesign.
 
 ## 11. Mistakes made & why
 
-*(after the phase)*
+*(recorded as they happen, while the reasoning is still recoverable)*
+
+**1. Assumed an array of a custom DOMAIN type would parse like `text[]`.**
+`blocked_mccs` is `mcc_code[]`. node-postgres has no parser registered for
+that OID, so it returned the raw Postgres literal `"{5921,7995}"` as a
+**string**. The repository then iterated it as characters, and the domain
+constructor rejected `"1"`, `","`, `"7"`, `"9"`, `"}"` as invalid MCCs -
+eleven tests failing with a bizarre error message.
+
+Confirmed by probe rather than by guessing: `mcc_code[]` returns a string,
+`text[]` returns an array, `mcc_code[]::text[]` returns an array. Fixed by
+casting in the SELECT.
+
+The interesting part is *why the cast is the right fix* and not merely the
+easy one. The alternative is registering a parser for the domain array's OID -
+but that OID (17454 here) is assigned when `CREATE DOMAIN` runs, so it
+**differs per database**. A hardcoded parser would work locally and break on a
+fresh deployment, which is a far worse failure than the one we started with.
+
+*Why it happened:* I introduced a domain type in Phase 2 for its per-element
+validation and never considered how the driver would read it back. A schema
+decision had a client-side consequence I did not follow through.
+*Lesson:* when you add a custom type to the schema, immediately check what the
+driver does with it on the way out. And the round-trip fidelity test - written
+to catch "a value mangled by array or date conversion" - earned its place
+within a minute of existing. Assertions on *every* field, not just the one
+under test, are what turn a silent corruption into a loud failure.
 
 ## 12. Open questions / debt
 
