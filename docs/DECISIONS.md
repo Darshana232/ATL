@@ -264,6 +264,37 @@ control and becomes evidence in the Phase 10 register.
 
 ---
 
+## ADR-0013 — Use Razorpay's public IFSC API; hand-seed the catalog
+**Date:** 2026-09-04 · **Status:** accepted
+
+**Decision.** Adopt `https://ifsc.razorpay.com/{IFSC}` (keyless, Razorpay-
+operated) for seed-time bank fixtures and for cold-path IFSC validation during
+mandate creation. **Never** call it — or any third-party API — inside the
+authorization path. Hand-seed the product catalog rather than integrating a
+fake-store API.
+
+**Context.** Evaluated `github.com/public-apis/public-apis` (MIT, 1,748
+entries). Full tiering in [`EXTERNAL_APIS.md`](EXTERNAL_APIS.md).
+
+**Reasoning.**
+- IFSC is a real Razorpay public API, needs no key, and returns a per-branch
+  `UPI` eligibility flag — real Indian bank and VPA-handle data instead of
+  invented strings, and an honest "we use the public Razorpay API where one
+  exists" claim.
+- The hot-path prohibition is the important half. A compliance verdict must not
+  depend on someone else's uptime: if the dependency is down, blocking every
+  payment and allowing every payment are both wrong answers.
+- DummyJSON and FakeStoreAPI work and need no key, but price in USD, list US
+  consumer goods, and carry **no MCC**. Our category rules key on ISO 18245
+  MCCs. Hand-seeded Indian grocery/food fixtures are more realistic *and* have
+  no network dependency.
+
+**Also recorded:** three of seven listed APIs tested were stale — one dead, one
+serving HTML instead of JSON, one now requiring a key while still advertised as
+keyless. A community directory is a discovery tool, not a source of truth.
+
+---
+
 ## ADR-0012 — Split liveness and readiness health checks
 **Date:** 2026-09-04 · **Status:** accepted
 
