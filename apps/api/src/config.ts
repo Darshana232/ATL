@@ -108,6 +108,20 @@ const configSchema = z
       (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
       z.string().min(64, 'must be at least 64 hex characters (32 random bytes)').optional(),
     ),
+
+    /**
+     * Phase 6: signs audit-chain checkpoints.
+     *
+     * A SEPARATE SECRET from VOUCHER_SIGNING_SECRET, on purpose. The two have
+     * different blast radii: leaking the voucher key lets someone mint a
+     * payment token, and it must not ALSO let them forge history. Key
+     * separation by purpose costs one environment variable and stops one
+     * compromise from becoming two.
+     */
+    AUDIT_CHECKPOINT_SECRET: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z.string().min(64, 'must be at least 64 hex characters (32 random bytes)').optional(),
+    ),
   })
   /**
    * Cross-field rule: things we tolerate missing in development must be
@@ -124,7 +138,26 @@ const configSchema = z
   .refine((cfg) => cfg.NODE_ENV !== 'production' || cfg.ADMIN_API_KEY !== undefined, {
     path: ['ADMIN_API_KEY'],
     message: 'is required when NODE_ENV=production (admin endpoints must not be open)',
-  });
+  })
+  .refine(
+    (cfg) => cfg.NODE_ENV !== 'production' || cfg.AUDIT_CHECKPOINT_SECRET !== undefined,
+    {
+      path: ['AUDIT_CHECKPOINT_SECRET'],
+      message: 'is required when NODE_ENV=production (audit checkpoints must be signed)',
+    },
+  )
+  .refine(
+    (cfg) =>
+      cfg.AUDIT_CHECKPOINT_SECRET === undefined ||
+      cfg.AUDIT_CHECKPOINT_SECRET !== cfg.VOUCHER_SIGNING_SECRET,
+    {
+      path: ['AUDIT_CHECKPOINT_SECRET'],
+      // The whole point of a second key is that it is a DIFFERENT key. Reusing
+      // one value would silently give us key separation on paper and none in
+      // fact, which is worse than not claiming it at all.
+      message: 'must not be the same value as VOUCHER_SIGNING_SECRET',
+    },
+  );
 
 export type Config = Readonly<z.infer<typeof configSchema>>;
 
@@ -191,6 +224,7 @@ export function describeConfig(config: Config): Record<string, string | number |
     anthropicKeySet: config.ANTHROPIC_API_KEY !== undefined,
     razorpayKeysSet: config.RAZORPAY_KEY_ID !== undefined && config.RAZORPAY_KEY_SECRET !== undefined,
     voucherSecretSet: config.VOUCHER_SIGNING_SECRET !== undefined,
+    auditCheckpointSecretSet: config.AUDIT_CHECKPOINT_SECRET !== undefined,
     adminKeySet: config.ADMIN_API_KEY !== undefined,
   };
 }

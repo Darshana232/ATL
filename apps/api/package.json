@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "migrate": "tsx src/db/migrate.ts",
     "seed": "tsx src/db/seed.ts",
-    "demo:authorize": "tsx src/demo/authorize-demo.ts"
+    "demo:authorize": "tsx src/demo/authorize-demo.ts",
+    "demo:tamper": "tsx src/demo/tamper-demo.ts"
   },
   "dependencies": {
     "dotenv": "17.4.2",

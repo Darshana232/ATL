@@ -241,3 +241,62 @@ Do not go broader than this list yet. Phase 2 will supply the next one.
   designs to compare against ours.
 - PostgreSQL docs, "Explicit Locking" and "Transaction Isolation".
 - OWASP ASVS v4, section 2 (authentication) and section 3 (session management).
+
+---
+
+## Phase 6 — The tamper-evident audit trail
+
+**Concepts**
+
+1. **A hash chain proves consistency, not authenticity.** You cannot change one
+   row — but someone who rewrites every row and every hash produces a chain that
+   verifies perfectly. There is nothing outside the chain to compare it to.
+2. **What a signed checkpoint actually buys**: it moves the requirement from
+   "database write access" to "database write access AND secret exfiltration".
+   It is not tamper-proofing.
+3. **External anchoring** is the real answer, and why an MVP cannot do it: it
+   needs a counterparty.
+4. **Hashing the whole record, not just the payload.** Otherwise attribution —
+   the part a regulator cares about most — is unprotected.
+5. **Canonical serialisation**: sorted keys, and rejecting ambiguous values
+   rather than coercing them.
+6. **Streaming with keyset pagination**, and why `OFFSET` is both accidentally
+   O(n²) and unstable on an append-only table.
+7. **Constant-time comparison** for signatures, and comparing lengths first
+   because `timingSafeEqual` throws on a mismatch.
+8. **Key separation by purpose**, plus a config rule that refuses to boot when
+   two keys are the same value.
+9. **Fail closed**: no secret → no checkpoint, and `unreachable` rather than
+   `valid`.
+10. **Verify before you anchor** — signing over a broken chain launders the
+    tampering.
+11. **Triggers fire for the table owner.** Ownership alone is not enough to edit
+    an append-only row; the attacker must disable the trigger, which is logged
+    DDL.
+
+**Skills practised**
+
+- Writing a verifier that imports the writer's hash function rather than
+  reimplementing it, so the two can never disagree.
+- Simulating a privileged-insider attack honestly, including the steps that
+  *fail* first.
+- Designing a status enum where "unknown" is unreachable from "bad".
+
+**Mistakes and what they taught**
+
+- `unreachable` did not count as broken, so deleting the entire trail reported
+  `intact`. → *A status meaning "unknown" must never be reachable from a
+  condition meaning "bad".* Found by a test written to demo a feature.
+- The duplicate-checkpoint test took three attempts: the first could not fail,
+  the second depended on winning a race. → *Construct the condition; do not hope
+  for it.* Third phase running with a version of this lesson.
+- An early response said `verified` instead of `intact`. → *Do not let a green
+  banner be screenshotted without its caveat.*
+
+**What to study next**
+
+- Certificate Transparency (RFC 6962) — the production version of everything in
+  this phase, including Merkle trees and external anchoring.
+- PostgreSQL docs: triggers, `ALTER TABLE … DISABLE TRIGGER`, and what the
+  `session_replication_role` setting can bypass.
+- "Keyset pagination" (Markus Winand, use-the-index-luke.com).

@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-05 · **Current phase:** 5 complete, 6 in progress
+**Last updated:** 2026-09-05 · **Current phase:** 6 complete, 7 in progress
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -27,7 +27,7 @@ product. Consolidated from thirteen on 2026-09-05 — see **ADR-0014**. Phases
 | 3 | Mandate domain, DTOs, repository, audit writer, mandate API | ✅ complete |
 | 4 | Deterministic policy engine (12 rules; 13th added in Phase 5) | ✅ complete |
 | 5 | Authorization endpoint: agent auth, idempotency, replay, voucher | ✅ complete |
-| 6 | Hash-chained audit trail + `/verify` + tamper demo | ⬜ |
+| 6 | Hash-chained audit trail + `/verify` + tamper demo | ✅ complete |
 | 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ⬜ |
 | 8 | Dashboard **and** reports (FREE-AI coverage, STR draft, DPDP register) | ⬜ |
 | 9 | Hardening: threat model, RBAC, rate limits, ESLint, CI, observability, deploy, demo | ⬜ |
@@ -138,25 +138,61 @@ concurrency test. A concurrency test that cannot fail is not evidence.
 
 ---
 
-## Next work unit — Phase 6: the tamper-evident audit trail
+## Added in Phase 6
 
-Write the before-half of `Understanding/PHASE_06_audit_trail.md` first.
+```
+apps/api/src/
+  audit/verifier.ts        streaming chain verification + checkpoint checks
+  audit/checkpoint.ts      HMAC-signed anchors; constant-time verification
+  repositories/audit.ts    keyset chain cursor, summary, checkpoint I/O
+  routes/audit.ts          GET /v1/audit/verify, /events; POST /checkpoint
+  demo/tamper-demo.ts      the buildathon moment, run as a privileged insider
+  db/migrations/0007_audit_checkpoints.sql
+  config.ts                + AUDIT_CHECKPOINT_SECRET (must differ from the
+                             voucher secret; config refuses to boot if equal)
+```
 
-The chain already exists (Phase 3 `audit/writer.ts`) and now carries real
-authorization decisions. Phase 6 makes it **provable**:
+**Verified working:** 499 tests green, `tsc --noEmit` clean, 7 migrations
+applied. Tampering is proven by *doing* it: an edited payload, an edited actor,
+an edited timestamp, a deleted event, a removed genesis, and a
+payload-edited-and-rehashed row are each detected and named, with the same chain
+asserted `intact` immediately beforehand as a control.
 
-1. **A verifier** that walks a chain and recomputes every hash with the SAME
-   `computeEventHash` the writer uses. Two implementations would eventually
-   disagree, and the disagreement would look like tampering.
-2. **`GET /v1/audit/verify`** returning intact/broken plus the first bad `seq`.
-3. **A tamper demonstration** — modify an old event as the OWNER (the app role
-   cannot), then show verification failing and naming the row. This is the
-   buildathon moment described in `CLAUDE.md` section 12.
-4. **Signed checkpoints**, so a full-chain rewrite by a superuser is also
-   detectable. Raises the bar; does not eliminate the threat.
-5. **The claim ceiling stays `tamper-evident`.** A hash chain *detects*
-   modification; it does not prevent someone with superuser rights from
-   rewriting the whole chain.
+**Two findings worth carrying forward:**
+1. The append-only trigger fires **for the table owner too**. A privileged
+   insider must `ALTER TABLE … DISABLE TRIGGER` first — owner-only DDL that
+   PostgreSQL logs. The barrier is higher than the design claimed.
+2. A verifier bug found by a test: a missing anchored event reported
+   `unreachable`, which did not mark the chain broken — so **deleting the whole
+   trail read as `intact`**. Fixed; `unreachable` now means only "no secret
+   configured".
+
+---
+
+## Next work unit — Phase 7: payments and the agent runtime
+
+Write the before-half of `Understanding/PHASE_07_payments_and_agent.md` first.
+
+Both halves are adapter work on the **outside** of the trust boundary — one
+adapting to a payment rail, one to a language model — and neither is a demo
+without the other (ADR-0014).
+
+**Payments**
+1. `PaymentProvider` interface + `MockUpiProvider` (default, labelled
+   SIMULATED) + `RazorpayTestProvider` (real test-mode API, when keys exist).
+2. **The voucher becomes load-bearing:** capture is refused without a valid,
+   unexpired, single-use voucher. `payments.voucher_jti UNIQUE` is what makes
+   single use a database fact.
+3. Webhooks with signature verification, replay protection and idempotent
+   handling — a duplicate webhook must not double-capture.
+
+**Agent runtime**
+4. Catalog provider (hand-seeded, Indian, with real MCCs — ADR-0013).
+5. Scoped tools: an agent receives only the tools `agent_tool_grants` permits.
+6. **The prompt-injection test.** A fully injected agent must still be unable to
+   move money — it can only ask, and asking goes through code it does not
+   control. This is the test that proves ADR-0008.
+7. MCP-compatible interface, if it earns its place.
 
 Owed from earlier phases: `EXPLAIN ANALYZE` on `loadForAuthorization` and the
 spend query, with real row counts.

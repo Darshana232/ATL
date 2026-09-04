@@ -17,6 +17,7 @@ import type { Pool } from './db/pool.js';
 import { healthRoutes } from './routes/health.js';
 import { mandateRoutes } from './routes/mandates.js';
 import { authorizeRoutes } from './routes/authorize.js';
+import { auditRoutes } from './routes/audit.js';
 import { RazorpayIfscProvider, type BankLookupProvider } from './providers/bank-lookup.js';
 import { MockRiskProvider, type RiskProvider } from './providers/risk.js';
 
@@ -146,6 +147,7 @@ export function buildServer({
       now,
     }),
   );
+  app.register(auditRoutes({ pool, config, now }));
 
   /* --- 404 -------------------------------------------------------------- */
   app.setNotFoundHandler((request, reply) => {

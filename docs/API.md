@@ -322,3 +322,98 @@ id?" loses the race a unique index wins.
 npm run seed                       # writes .seed-keys.json (gitignored)
 npm run demo:authorize -w apps/api # real socket, real signatures, 7 scenarios
 ```
+
+---
+
+## Audit endpoints
+
+All three require `x-atl-admin-key`. The trail contains merchant names, amounts,
+mandate ids and — in `user_intent` — personal data, so none of them is open.
+
+### `GET /v1/audit/verify`
+
+Walks the chain, recomputes every hash, and reports the first place the record
+and the computation disagree.
+
+```json
+{
+  "chainId": "main",
+  "status": "intact",
+  "eventsChecked": 1490,
+  "totalEvents": 1490,
+  "firstBreak": null,
+  "headHash": "35a71c08864a7db5…",
+  "checkpoints": [
+    { "id": "ckpt_…", "seq": 1490, "status": "valid", "detail": "Anchor signature and head hash both match." }
+  ],
+  "durationMs": 41,
+  "limitation": "TAMPER-EVIDENT, NOT TAMPER-PROOF. …"
+}
+```
+
+On damage:
+
+```json
+{
+  "status": "broken",
+  "eventsChecked": 1,
+  "totalEvents": 5,
+  "firstBreak": {
+    "seq": 1487,
+    "eventId": "evt_816a17b9ddd6ee4a3d37512f",
+    "kind": "event_hash_mismatch",
+    "detail": "A hashed field of this event was altered. The hash covers the WHOLE record…"
+  }
+}
+```
+
+**`kind`** is one of `payload_hash_mismatch` (the payload was edited),
+`event_hash_mismatch` (any hashed field — actor, timestamp, event type),
+`broken_link` (an earlier event was edited-and-rehashed, or removed),
+`unexpected_genesis`, `missing_genesis`.
+
+**Only the first break is reported.** After one broken link every later row also
+fails; listing them all would return a million lines describing one edit.
+`eventsChecked` says how far the chain was sound.
+
+**200 for both outcomes** — the verification ran and produced an answer. Same
+reasoning as ADR-0016.
+
+> **`limitation` is present on every response, including successful ones.** A
+> hash chain *detects* modification; it does not prevent it. Do not present a
+> green result as "tamper-proof".
+
+### `POST /v1/audit/checkpoint`
+
+Anchors the current head with an HMAC signature, so a later *consistent
+full-chain rewrite* becomes detectable.
+
+```json
+{ "chainId": "main", "createdBy": "compliance@example.com" }
+```
+
+`201` with the signed facts. Errors: `409 chain_broken` (the chain does not
+currently verify — anchoring it would certify the damage), `409 chain_empty`,
+`409 checkpoint_exists`, `503 checkpoints_unavailable` (no signing secret
+configured — we fail closed rather than issue a forgeable anchor).
+
+### `GET /v1/audit/events`
+
+Newest first, keyset-paginated. Query: `chainId`, `mandateId`, `eventType`,
+`beforeSeq`, `limit` (capped at 200). Every event is returned with its
+`payloadHash`, `prevHash` and `hash`, so a third party can recompute the chain
+without trusting our verifier.
+
+Pagination is **keyset** (`beforeSeq`), not `OFFSET`: this table is append-only,
+so rows arriving mid-pagination would make offsets skip and repeat.
+
+### Try it
+
+```
+npm run demo:tamper -w apps/api
+```
+
+Writes five real events, verifies, anchors them, shows the application role
+*and* the database owner both being refused, then disables the append-only
+trigger as a privileged insider would, edits one event's **actor**, and shows
+verification failing and naming the row.

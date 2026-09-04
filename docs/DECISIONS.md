@@ -461,3 +461,53 @@ evidence is the product.
 
 **Note.** `attempt.agentId` comes from signature verification and never from the
 request body — otherwise the rule would compare a claim against a claim.
+
+---
+
+## ADR-0018 — Signed checkpoints over the audit chain, and their honest limit
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** Add `audit_checkpoints` (migration 0007): periodic, HMAC-signed
+anchors recording "at seq N, on this date, the head hash was H, over M events".
+Signed with `AUDIT_CHECKPOINT_SECRET`, which **must differ** from
+`VOUCHER_SIGNING_SECRET` — config refuses to boot if they match.
+
+**The gap it fills.** A hash chain detects a *single* edit, because altering one
+row breaks every hash after it. It does **not** detect a *consistent rewrite*:
+someone with superuser rights can recompute every row and every hash, and the
+result verifies perfectly. **A chain proves internal consistency, never
+authenticity.** The checkpoint is the first thing in the system that remembers
+what the head used to be, from outside the chain.
+
+**The honest limit, stated everywhere this feature appears.** This raises the
+bar from *"can write to the database"* to *"can write to the database **and**
+exfiltrate a secret"*. It does not make the trail tamper-proof. Only anchoring
+the head hash somewhere we do not control — a public transparency log, a
+counterparty, a published notice — does that, and that needs a counterparty an
+MVP does not have. **Our claim ceiling remains `tamper-evident`.**
+
+**Why a separate key.** Different blast radius. Leaking the voucher secret lets
+someone mint a payment token; it must not *also* let them forge history. The
+refuse-if-equal check matters more than the second variable — without it,
+someone eventually pastes one value into both and we have key separation on
+paper and none in fact.
+
+**Verify before anchoring.** `POST /v1/audit/checkpoint` returns 409 if the
+chain does not currently verify. Signing a checkpoint over a broken chain would
+give a forged history our own signature — laundering the tampering rather than
+detecting it.
+
+**Alternatives considered.** A Merkle tree (rejected for the MVP: better at
+scale, materially harder to explain and to get right, and nobody yet needs
+single-event proofs); asymmetric checkpoint signatures (deferred — the
+production path, where a verifier can check anchors without being able to mint
+them); blockchain anchoring (rejected: it is external anchoring with extra
+steps, cost and marketing risk, and `CLAUDE.md` §6 forbids blockchain for
+marketing).
+
+**Also recorded — a finding from building the tamper demo.** The append-only
+`BEFORE UPDATE OR DELETE` trigger fires **for the table owner too**, not only
+for `atl_app`. To edit a past event, an attacker must first
+`ALTER TABLE … DISABLE TRIGGER`, which requires ownership and which PostgreSQL
+logs. The barrier is higher than the original design claimed, and the demo now
+shows both refusals before the tamper succeeds.

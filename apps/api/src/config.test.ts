@@ -122,15 +122,44 @@ describe('loadConfig - production hardening', () => {
     ).toThrow(/ADMIN_API_KEY/);
   });
 
+  it('refuses to boot in production without AUDIT_CHECKPOINT_SECRET', () => {
+    // An unsigned checkpoint is an anchor anyone could forge, which is worse
+    // than no anchor: the verification report would look reassuring while
+    // proving nothing.
+    expect(() =>
+      loadConfig({
+        ...productionEnv,
+        VOUCHER_SIGNING_SECRET: 'a'.repeat(64),
+        ADMIN_API_KEY: 'b'.repeat(40),
+      }),
+    ).toThrow(/AUDIT_CHECKPOINT_SECRET/);
+  });
+
+  it('refuses to reuse the voucher secret as the checkpoint secret', () => {
+    // The whole point of a second key is that it is a DIFFERENT key. Reusing
+    // one value gives key separation on paper and none in fact - and leaking
+    // the voucher key would then also let someone forge history.
+    expect(() =>
+      loadConfig({
+        ...productionEnv,
+        VOUCHER_SIGNING_SECRET: 'a'.repeat(64),
+        AUDIT_CHECKPOINT_SECRET: 'a'.repeat(64),
+        ADMIN_API_KEY: 'b'.repeat(40),
+      }),
+    ).toThrow(/must not be the same value/);
+  });
+
   it('boots in production when every required secret is present', () => {
     const config = loadConfig({
       ...productionEnv,
       VOUCHER_SIGNING_SECRET: 'a'.repeat(64),
+      AUDIT_CHECKPOINT_SECRET: 'c'.repeat(64),
       ADMIN_API_KEY: 'b'.repeat(40),
     });
 
     expect(config.NODE_ENV).toBe('production');
     expect(config.VOUCHER_SIGNING_SECRET).toHaveLength(64);
+    expect(config.AUDIT_CHECKPOINT_SECRET).toHaveLength(64);
     expect(config.ADMIN_API_KEY).toHaveLength(40);
   });
 
