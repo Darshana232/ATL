@@ -156,6 +156,11 @@ interface VersionSpec {
   validFrom: string;
   validTo: string;
   changeReason: string | null;
+  /**
+   * When consent for these terms was obtained. Required on every version
+   * (migration 0006) and must not postdate the row's creation.
+   */
+  consentAt: string;
 }
 
 interface MandateSpec {
@@ -180,6 +185,7 @@ const baseVersion = (overrides: Partial<VersionSpec> & { version: number }): Ver
   validFrom: '2026-09-01T00:00:00Z',
   validTo: '2026-12-31T23:59:59Z',
   changeReason: null,
+  consentAt: '2026-09-01T08:55:00Z',
   ...overrides,
 });
 
@@ -213,6 +219,7 @@ const MANDATES: MandateSpec[] = [
         endHour: 20,
         weekdays: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'],
         changeReason: 'user raised weekly budget before a festival',
+        consentAt: '2026-09-02T19:10:00Z',
       }),
       baseVersion({
         version: 3,
@@ -220,6 +227,7 @@ const MANDATES: MandateSpec[] = [
         endHour: 20,
         weekdays: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'],
         changeReason: 'user blocked alcohol and gambling categories',
+        consentAt: '2026-09-03T07:40:00Z',
       }),
     ],
   },
@@ -258,6 +266,7 @@ const MANDATES: MandateSpec[] = [
         validFrom: '2026-05-01T00:00:00Z',
         validTo: '2026-06-30T23:59:59Z',
         changeReason: 'initial mandate',
+        consentAt: '2026-04-28T10:00:00Z',
       }),
     ],
   },
@@ -455,8 +464,9 @@ async function seed(pool: Pool, logger: Logger, rotateKeys: boolean): Promise<vo
           `INSERT INTO mandate_versions
              (mandate_id, version, per_txn_limit_paise, window_limit_paise, window_kind,
               max_txn_per_hour, blocked_mccs, window_start_hour, window_end_hour,
-              allowed_weekdays, valid_from, valid_to, created_by, change_reason)
-           VALUES ($1,$2,$3,$4,$5,$6,$7::mcc_code[],$8,$9,$10,$11,$12,'seed',$13)
+              allowed_weekdays, valid_from, valid_to, created_by, change_reason,
+              consent_ref, consent_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::mcc_code[],$8,$9,$10,$11,$12,'seed',$13,$14,$15)
            ON CONFLICT (mandate_id, version) DO NOTHING`,
           [
             mandate.id,
@@ -472,6 +482,12 @@ async function seed(pool: Pool, logger: Logger, rotateKeys: boolean): Promise<vo
             version.validFrom,
             version.validTo,
             version.changeReason,
+            // Every version requires recorded consent (migration 0006). These
+            // are FIXTURE references and are labelled as such - they point at
+            // no real consent record, because no user actually agreed to
+            // anything in a seed script.
+            `consent_seed_${mandate.id}_v${version.version}`,
+            version.consentAt,
           ],
         );
 

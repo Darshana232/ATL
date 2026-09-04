@@ -157,6 +157,10 @@ async function insertVersion(
     valid_from: '2026-09-01T00:00:00Z',
     valid_to: '2026-12-31T23:59:59Z',
     created_by: 'test',
+    // Required on every version since migration 0006. Supplying these by
+    // default keeps each test focused on the one field it is breaking.
+    consent_ref: 'consent_test_ref_0001',
+    consent_at: '2026-09-01T08:55:00Z',
     ...overrides,
   };
 
@@ -471,6 +475,47 @@ describe('mandate terms cannot be incoherent', () => {
       await seedBaseline(client);
       const error = await insertVersion(client, { signature: 'sig_abc' });
       expect(error?.constraint).toBe('mandate_versions_signature_complete');
+    });
+  });
+
+  it('REFUSES a version with no consent reference', async () => {
+    // Every version requires recorded consent, including version 1. There is
+    // no code path that can skip this, because NOT NULL involves no code.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await captureError(
+        client,
+        `INSERT INTO mandate_versions
+           (mandate_id, version, per_txn_limit_paise, window_limit_paise, window_kind,
+            max_txn_per_hour, valid_from, valid_to, created_by, consent_at)
+         VALUES ('mnd_test', 1, 200000, 500000, 'week', 5,
+                 '2026-09-01T00:00:00Z', '2026-12-31T23:59:59Z', 'test',
+                 '2026-09-01T08:55:00Z')`,
+      );
+
+      // 23502 = not_null_violation
+      expect(error?.code).toBe('23502');
+    });
+  });
+
+  it('REFUSES a blank consent reference', async () => {
+    // An empty string satisfies NOT NULL while meaning nothing.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await insertVersion(client, { consent_ref: '   ' });
+      expect(error?.constraint).toBe('mandate_versions_consent_ref_not_blank');
+    });
+  });
+
+  it('REFUSES consent dated after the change it authorises', async () => {
+    // "We have consent" dated next year is not consent for this change.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await insertVersion(client, { consent_at: '2027-01-01T00:00:00Z' });
+      expect(error?.constraint).toBe('mandate_versions_consent_not_after_creation');
     });
   });
 
