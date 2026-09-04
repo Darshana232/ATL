@@ -419,7 +419,55 @@ establishing that Postgres could not cope.
 
 ## 11. Mistakes made & why
 
-*(after the phase — the most valuable section)*
+*(recorded as they happen, while the reasoning is still recoverable)*
+
+**1. Asserted a key length instead of measuring it.** The
+`agent_credentials_public_key_shape` constraint required 43 base64 characters
+plus `=`. An Ed25519 SPKI public key is 44 DER bytes, which encodes to **60**
+base64 characters (59 + one pad). I took "44" from glancing at an earlier
+console output and assumed it was the string length; it was the byte length.
+*Why it happened:* the same assumption-not-verification pattern as pnpm
+(Phase 1 mistake 1) and Docker (mistake 2). Third occurrence in this project.
+*Lesson:* when a constraint encodes a magic number, produce the number by
+measurement in the same session, and put the measurement in a comment.
+
+**2. Amended an applied migration instead of adding a new one — and that was
+correct.** Fixing the constraint meant either editing `0002` (which the
+checksum guard refuses) or shipping `0003` to patch a constraint added seconds
+earlier. I dropped the objects locally, deleted the ledger row, edited `0002`,
+and re-applied.
+
+That looks like breaking the append-only rule, so the boundary is worth stating
+precisely: **the rule protects *published* migrations.** It exists because other
+environments may have applied one. `0002` was local-only and uncommitted, so
+nobody else could have it. This is exactly `git commit --amend` versus
+`git revert` — amend before publishing, migrate forward after. A dogmatic
+reading would have left a permanent patch-my-own-typo migration in the schema
+history.
+
+**3. My verification harness produced false proof — the worst of the three.**
+The credential "attack" tests used IDs like `cred_a`, which violate
+`agent_credentials_id_format` (`{2,40}` characters after the prefix). So every
+single credential insert was rejected — but by the **ID** constraint, never
+reaching the key-shape constraint I believed I was testing. The harness printed
+only `REJECTED`, so eight rejections looked like eight proofs.
+
+Worse, it hid the real diagnosis: I concluded the valid key was rejected because
+the length regex said 43, "fixed" that, and it *still* failed — because the
+actual cause was the ID. I fixed a genuine bug for a reason that was not
+occurring.
+
+*Why it happened:* the harness reported a boolean where the interesting
+information was the *reason*.
+*Lesson:* **a test that passes for the wrong reason is worse than a failing
+test**, because it manufactures confidence. Assertions must name the specific
+constraint or error they expect, never just "it threw". The fix was to print
+the constraint name, after which one insert was accepted and eight were
+rejected each by the constraint intended.
+
+This is why section 7 lists the *failure each test prevents* rather than just
+the test name — a test whose purpose you cannot state is a test that can pass
+vacuously.
 
 ## 12. Open questions / debt
 
