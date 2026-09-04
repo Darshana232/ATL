@@ -9,6 +9,33 @@ payments** on Indian rails.
 > regulator. Every simulated component is labelled as such — in the code, in
 > the UI, and in [`docs/RESEARCH_REALITY_CHECK.md`](docs/RESEARCH_REALITY_CHECK.md).
 
+> ### ⚠️ About the `Research/` folder — read before quoting anything from it
+>
+> `Research/` is **input material, not findings**. It is committed for
+> provenance so the corrections applied to it are traceable — **not** because
+> it is accurate.
+>
+> Specifically, it contains:
+>
+> - **Quotes attributed to named companies that appear to be fabricated**,
+>   including a "Bigbasket Compliance Lead" and a "Payment Processor Compliance
+>   Officer". No merchant interviews took place. These are **not** real
+>   statements by those organisations or by anyone at them.
+> - **Document bylines such as "Razorpay Compliance & Product Team" and
+>   "Razorpay Founder".** These are not authored by Razorpay. This project has
+>   no affiliation with, endorsement from, or relationship to Razorpay, NPCI,
+>   BigBasket, Zomato, Swiggy, Zepto or any other company named in it.
+> - **Revenue projections, market sizing and regulatory claims that are
+>   unverified or wrong.** Several are demonstrably incorrect.
+>
+> Every one of these is itemised, with corrections and sources, in
+> [`docs/RESEARCH_REALITY_CHECK.md`](docs/RESEARCH_REALITY_CHECK.md). **Read
+> that file before citing anything from `Research/`.**
+>
+> Company names appearing in seed fixtures (`apps/api/src/db/seed.ts`) are
+> illustrative test data only. Merchants in restricted categories use invented
+> names deliberately.
+
 ---
 
 ## The problem
