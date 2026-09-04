@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-04 · **Current phase:** 2 complete, 3 not started
+**Last updated:** 2026-09-05 · **Current phase:** 3 complete, 4 not started
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -20,8 +20,8 @@ Two documentation sets, different audiences:
 | 0 | Repo, docs, decision log | ✅ complete |
 | 1 | Foundation: workspace, config, logging, DB pool, migrations, health | ✅ complete |
 | 2 | Full core schema + seed data | ✅ complete |
-| 3 | Mandate domain + API | ⬜ next |
-| 4 | Deterministic policy engine (7 rules) | ⬜ |
+| 3 | Mandate domain + API | ✅ complete |
+| 4 | Deterministic policy engine (7 rules) | ⬜ next |
 | 5 | Authorization endpoint: agent auth, HMAC, idempotency, voucher | ⬜ |
 | 6 | Hash-chained audit trail + verification + tamper demo | ⬜ |
 | 7 | Payment adapters (mock + Razorpay test) + webhooks | ⬜ |
@@ -81,33 +81,36 @@ PostgreSQL 16.15 via Homebrew (`brew services`), database `atl_india_dev`.
 
 ---
 
-## Next work unit — Phase 3: mandates
+## Next work unit — Phase 4: the policy engine
 
-Write the before-half of `Understanding/PHASE_03_mandates.md` first, then build.
+Write the before-half of `Understanding/PHASE_04_policy_engine.md` first.
 
-The schema already enforces the hard guarantees (immutable versions, terminal
-revocation, deny-by-default allowlist). Phase 3 is the domain layer and the API
-on top of it:
+**This is the heart of the product** and the best engineering lesson in the
+project: a pure, deterministic function that takes a mandate version, a
+request, current spend, a clock reading and a risk signal, and returns a typed
+`Decision` with a per-rule breakdown.
 
-1. **Domain types** in `packages/core` — `Mandate`, `MandateVersion`, `Money`
-   as branded types. Pure, no I/O, so Phase 4's engine can consume them.
-2. **DTO vs domain model** — the wire shape (rupee strings, ISO dates) is not
-   the internal shape (integer paise, `Date`). Zod at the boundary.
-3. **Repository** — load a mandate with its current version and allowlist in
-   one query; load a *specific* version for re-explaining a past decision.
-4. **API**: `POST /v1/mandates`, `GET /v1/mandates/:id`,
-   `POST /v1/mandates/:id/versions`, `POST /v1/mandates/:id/revoke`.
-5. **Cold-path IFSC lookup** (ADR-0013) — validate an IFSC at mandate
-   creation via Razorpay's public API, with a timeout and graceful
-   degradation. Never on the authorization path.
-6. **First audit events** — `MANDATE_CREATED`, `MANDATE_VERSION_ADDED`,
-   `MANDATE_REVOKED`. Written unchained for now; Phase 6 adds the hash chain.
+1. **Pure functions.** The engine takes NO `Date.now()`, no database handle,
+   no network. Time and state are passed in. That is what makes it
+   deterministic, replayable and testable without infrastructure.
+2. **Seven rules**, each emitting `Signal → Rule → Evaluation → Verdict →
+   Reason` as a typed record produced by code — never prose from a model.
+   Per-txn limit · window limit · merchant allowlist · category (MCC) ·
+   velocity · expiry · revocation. Risk is advisory input only.
+3. **Boundary-value tests** on every limit: `==`, `+1`, `-1`.
+4. **Exhaustive `switch` over `Verdict`** so the compiler catches an unhandled
+   case.
+5. **The reason must contain numbers** — "exceeds the ₹2,000 limit by ₹4,200",
+   not "limit exceeded".
+6. **The time-window rule needs timezone conversion** (`mandate_versions.timezone`
+   is stored for exactly this): "08:00–20:00" is user-local, storage is UTC.
+7. **The correction the research got wrong:** `MANDATE_PER_TXN_LIMIT` (user-set)
+   and `AFA_EXEMPTION_THRESHOLD` (regulatory, NPCI UPI/OC-151A) are two
+   different rules with two different owners. Ours enforces the first and only
+   records the second.
 
-Open question to settle in the before-half: does creating a version require
-re-consent from the user, and how is that recorded given the consent-ledger
-gap noted in PHASE_02 §12?
-
----
+Owed from earlier phases: `EXPLAIN ANALYZE` on `loadForAuthorization` and the
+Phase 2 spend query, with real row counts.
 
 ## Standing constraints (do not re-litigate silently)
 

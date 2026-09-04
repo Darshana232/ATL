@@ -77,6 +77,20 @@ const configSchema = z
 
     /* --- Optional until the phase that needs them --------------------- */
 
+    /**
+     * Shared key for the Phase 3 admin endpoints (mandate creation, version
+     * addition, revocation).
+     *
+     * This is NOT the real authentication model - Phase 5 replaces it with
+     * per-agent Ed25519 signatures and per-user sessions. It exists because
+     * shipping unauthenticated mandate-MUTATION endpoints, even locally,
+     * normalises exactly the wrong default. Required in production (below).
+     */
+    ADMIN_API_KEY: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z.string().min(32, 'must be at least 32 characters').optional(),
+    ),
+
     /** Phase 8: agent runtime. */
     ANTHROPIC_API_KEY: optionalText,
 
@@ -106,7 +120,11 @@ const configSchema = z
       path: ['VOUCHER_SIGNING_SECRET'],
       message: 'is required when NODE_ENV=production',
     },
-  );
+  )
+  .refine((cfg) => cfg.NODE_ENV !== 'production' || cfg.ADMIN_API_KEY !== undefined, {
+    path: ['ADMIN_API_KEY'],
+    message: 'is required when NODE_ENV=production (admin endpoints must not be open)',
+  });
 
 export type Config = Readonly<z.infer<typeof configSchema>>;
 
@@ -173,5 +191,6 @@ export function describeConfig(config: Config): Record<string, string | number |
     anthropicKeySet: config.ANTHROPIC_API_KEY !== undefined,
     razorpayKeysSet: config.RAZORPAY_KEY_ID !== undefined && config.RAZORPAY_KEY_SECRET !== undefined,
     voucherSecretSet: config.VOUCHER_SIGNING_SECRET !== undefined,
+    adminKeySet: config.ADMIN_API_KEY !== undefined,
   };
 }

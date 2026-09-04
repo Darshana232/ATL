@@ -114,14 +114,24 @@ describe('loadConfig - production hardening', () => {
     expect(() => loadConfig(productionEnv)).toThrow(/VOUCHER_SIGNING_SECRET/);
   });
 
-  it('boots in production when the secret is present', () => {
+  it('refuses to boot in production without ADMIN_API_KEY', () => {
+    // Admin endpoints mutate mandates. Deploying with them unprotected is the
+    // same class of mistake as deploying without the voucher secret.
+    expect(() =>
+      loadConfig({ ...productionEnv, VOUCHER_SIGNING_SECRET: 'a'.repeat(64) }),
+    ).toThrow(/ADMIN_API_KEY/);
+  });
+
+  it('boots in production when every required secret is present', () => {
     const config = loadConfig({
       ...productionEnv,
       VOUCHER_SIGNING_SECRET: 'a'.repeat(64),
+      ADMIN_API_KEY: 'b'.repeat(40),
     });
 
     expect(config.NODE_ENV).toBe('production');
     expect(config.VOUCHER_SIGNING_SECRET).toHaveLength(64);
+    expect(config.ADMIN_API_KEY).toHaveLength(40);
   });
 
   it('rejects a signing secret that is too short to be a strong HMAC key', () => {

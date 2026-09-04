@@ -17,6 +17,7 @@
  * cannot tell you the other exists.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { loadConfig, type Config } from '../config.js';
 import { createLogger } from '../logger.js';
 import { closePool, createPool, type Pool } from './pool.js';
@@ -141,17 +142,24 @@ describe.skipIf(!hasSeparateRoles)('the application role can still do its job', 
   it('CAN append to the audit trail', async () => {
     // Append is the one thing the application MUST be able to do here.
     // Rolled back, so the append-only table is not polluted by a test.
+    //
+    // Uses its OWN chain_id. An earlier version wrote a genesis row (prev_hash
+    // NULL) to the default 'main' chain, which passed only while that chain
+    // was empty - once the route tests created real events, the single-genesis
+    // index correctly rejected it. That is PHASE_02 mistake 7 again in a new
+    // guise: a test with a hidden precondition on global state.
     const client = await appPool.connect();
+    const chainId = `test_roles_${randomBytes(6).toString('hex')}`;
     try {
       await client.query('BEGIN');
       const inserted = await client.query(
         `INSERT INTO audit_events
-           (id, event_type, actor_kind, actor_id, subject_kind, subject_id,
+           (id, chain_id, event_type, actor_kind, actor_id, subject_kind, subject_id,
             payload, payload_hash, hash)
-         VALUES ('evt_roletest', 'ROLE_TEST', 'system', NULL, 'audit', 'role-check',
-                 '{"probe":true}', $1, $2)
+         VALUES ('evt_roletest', $1, 'ROLE_TEST', 'system', NULL, 'audit', 'role-check',
+                 '{"probe":true}', $2, $3)
          RETURNING seq`,
-        ['a'.repeat(64), 'b'.repeat(64)],
+        [chainId, 'a'.repeat(64), 'b'.repeat(64)],
       );
       expect(inserted.rowCount).toBe(1);
     } finally {

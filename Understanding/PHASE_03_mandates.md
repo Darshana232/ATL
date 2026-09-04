@@ -1,7 +1,7 @@
 # Phase 3 — Mandates
 
-**Status:** IN PROGRESS (before-half written, decisions settled)
-**Started:** 2026-09-04 · **Finished:** —
+**Status:** DONE · **Started:** 2026-09-04 · **Finished:** 2026-09-05
+**Result:** domain + DTO + repository + audit chain + 6 endpoints, 275 tests.
 
 > Sections 1–9 before any code. Sections 10–12 after.
 
@@ -377,7 +377,58 @@ partitioning problem rather than a redesign.
 
 ## 10. What I learned
 
-*(after the phase)*
+**A live smoke test finds things a green suite cannot.** 275 in-process tests
+passed, and the first real HTTP run immediately surfaced two problems: a
+constraint returning an opaque 500, and a timeout too tight for a cold
+connection. Neither was reachable from the suite, because every test happened
+to use a past `consentAt` and a static bank provider. **Tests share your
+assumptions; a real run does not.**
+
+**Map the constraint failures a caller can cause — and only those.** A `CHECK`
+we deliberately added produced a stack trace instead of an explanation. The fix
+maps known constraints to a field and a message, and deliberately lets
+unmapped ones stay 500s: an unmapped constraint failure means *our* code built
+an invalid row, which is our bug, and presenting it as the caller's mistake
+would send them chasing something they cannot fix.
+
+**Depend on the narrowest interface that does the job.** `lookupBankSafely`
+originally demanded our full pino `Logger`, which meant a Fastify route handler
+— holding the weaker `FastifyBaseLogger` — could not call it. Asking for
+`{ warn(details, message): void }` instead made the type error disappear *and*
+made the function more reusable. The compiler was pointing at a design problem,
+not an annotation problem.
+
+**Graceful degradation has to be tested by actually degrading.** The
+`FailingBankProvider` exists so the degraded path runs in CI, and then the real
+timeout fired in production-like conditions and behaved identically. A
+fallback you have never executed is a hypothesis.
+
+**Put the swallow at the call site, not inside the dependency.**
+`RazorpayIfscProvider` throws honestly; `lookupBankSafely` decides that failure
+is survivable. If the provider swallowed its own errors, no caller could ever
+choose to care.
+
+**`JOIN LATERAL` is what makes "one query" possible.** A correlated subquery
+that needs the outer row — "the newest version *of this mandate*" — is not
+expressible with a plain subquery in the FROM clause. Asserting the query count
+in a test turned "should be one query" into a fact.
+
+**An empty array and null are different, and the difference is a security
+property.** An empty allowlist means *no merchant is permitted*. If it were
+read as null, then as "unset", then as "all", a deny-by-default rule would
+invert into allow-by-default. Guarded in SQL (`COALESCE`), in the mapper, and
+in the DTO (`merchantIds` is required, not optional-with-default).
+
+**Custom database types have client-side consequences.** A `DOMAIN` array
+returns as a raw string because the driver has no parser for its OID — and that
+OID differs per database, so the fix is a cast in SQL, not a registered parser.
+Schema decisions do not stop at the schema.
+
+**`NOT NULL` beats a correct implementation.** Choosing "every version requires
+consent" over "classify the diff and gate only widening changes" removed a
+function from the security path entirely. The rejected design was more elegant
+and would have worked; it also would have meant a bug in a classifier equalled
+a silent authority increase.
 
 ## 11. Mistakes made & why
 
@@ -409,6 +460,34 @@ to catch "a value mangled by array or date conversion" - earned its place
 within a minute of existing. Assertions on *every* field, not just the one
 under test, are what turn a silent corruption into a loud failure.
 
+**2. A test assumed an empty audit CHAIN - the same mistake as PHASE_02 §11.7,
+wearing different clothes.** `roles.test.ts` proved the app role can append to
+the audit trail by inserting a row with `prev_hash NULL` - a genesis row. That
+passed for as long as the `main` chain was empty. The moment the route tests
+created real events, the single-genesis unique index correctly rejected it, and
+the test failed for a reason unrelated to what it was checking.
+
+*Why it happened:* I fixed the earlier instance by namespacing test **ids**,
+and did not generalise the lesson. The actual principle is broader than ids: a
+test must not depend on global state it did not establish. A chain is global
+state; so is a sequence, a counter, a "first row", and anything else that is
+unique across the database.
+
+*Lesson:* when a test asserts something about a *singleton* - the first row, an
+empty table, the only genesis - ask what happens when the system is used
+normally. Fixed by giving the test its own `chain_id`, the same way the writer
+tests already did. That the writer tests got it right and this one did not is
+itself the tell: I had already solved the problem once and did not look.
+
+**3. Adding a production requirement broke an existing test, correctly.**
+Making `ADMIN_API_KEY` mandatory in production immediately failed
+`config.test.ts > boots in production when the secret is present`, because that
+test's environment satisfied only the old requirement. Not really a mistake -
+this is the test suite doing its job - but worth recording because the instinct
+in the moment is to treat a red test as a problem with the test. Here the red
+was correct and the fix was to add the new secret *and* a new test asserting
+production refuses to boot without it.
+
 ## 12. Open questions / debt
 
 - **Consent is a reference, not a ledger.** We store `consent_ref` +
@@ -425,3 +504,22 @@ under test, are what turn a silent corruption into a loud failure.
   any mandate accumulates hundreds.
 - **`EXPLAIN ANALYZE` still owed** on `loadForAuthorization` and the Phase 2
   spend query, with real row counts.
+
+### Added during the phase
+
+- **`appendAuditEvent` cannot verify it is inside a transaction.** The advisory
+  lock is only meaningful within one, but there is no reliable runtime check
+  (a read-only transaction has no assigned xid). Enforced by documentation and
+  the parameter name `txClient`. A genuine weak spot.
+- **Read endpoints are unauthenticated.** Only mutations are behind the admin
+  key. Anyone who can reach the port can read every mandate. Acceptable bound
+  to `127.0.0.1` in development; must not survive Phase 9.
+- **The admin key is one shared secret with no rotation, expiry or per-caller
+  identity.** `createdBy` is a self-declared string, so the audit trail records
+  a *claim* about who acted, not a verified identity. Phase 5 fixes this.
+- **Route tests permanently add rows** to `mandates`, `mandate_versions` and
+  `audit_events`, because those tables are append-only by design and the routes
+  commit. Cleared only by the full reset.
+- **No pagination** on `GET /versions`, and no rate limiting anywhere.
+- **The bank lookup is uncached.** Branch data is nearly static, so repeated
+  IFSC lookups re-hit a third party unnecessarily.

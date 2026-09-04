@@ -15,11 +15,19 @@ import type { Config } from './config.js';
 import type { Logger } from './logger.js';
 import type { Pool } from './db/pool.js';
 import { healthRoutes } from './routes/health.js';
+import { mandateRoutes } from './routes/mandates.js';
+import { RazorpayIfscProvider, type BankLookupProvider } from './providers/bank-lookup.js';
 
 export interface ServerDependencies {
   config: Config;
   logger: Logger;
   pool: Pool;
+  /**
+   * Injected so tests use a static, offline provider. Defaults to the real
+   * Razorpay IFSC API, which is only ever called on the cold path
+   * (mandate creation) - never during authorization. See ADR-0013.
+   */
+  bankLookup?: BankLookupProvider;
 }
 
 /**
@@ -29,7 +37,7 @@ export interface ServerDependencies {
  * this function a pool pointing at a throwaway database, or a deliberately
  * broken one, without touching global state or monkey-patching modules.
  */
-export function buildServer({ config, logger, pool }: ServerDependencies): FastifyInstance {
+export function buildServer({ config, logger, pool, bankLookup }: ServerDependencies): FastifyInstance {
   const app = Fastify({
     /**
      * Fastify 5 takes an existing pino instance as `loggerInstance`.
@@ -70,6 +78,13 @@ export function buildServer({ config, logger, pool }: ServerDependencies): Fasti
 
   /* --- Routes ---------------------------------------------------------- */
   app.register(healthRoutes({ pool, startedAt: Date.now() }));
+  app.register(
+    mandateRoutes({
+      pool,
+      config,
+      bankLookup: bankLookup ?? new RazorpayIfscProvider(),
+    }),
+  );
 
   /* --- 404 -------------------------------------------------------------- */
   app.setNotFoundHandler((request, reply) => {
