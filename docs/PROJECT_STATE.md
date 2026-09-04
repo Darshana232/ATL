@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-04 · **Current phase:** 1 complete, 2 design approved pending
+**Last updated:** 2026-09-04 · **Current phase:** 2 complete, 3 not started
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -19,8 +19,8 @@ Two documentation sets, different audiences:
 |---|---|---|
 | 0 | Repo, docs, decision log | ✅ complete |
 | 1 | Foundation: workspace, config, logging, DB pool, migrations, health | ✅ complete |
-| 2 | Full core schema + seed data | ⬜ next |
-| 3 | Mandate domain + API | ⬜ |
+| 2 | Full core schema + seed data | ✅ complete |
+| 3 | Mandate domain + API | ⬜ next |
 | 4 | Deterministic policy engine (7 rules) | ⬜ |
 | 5 | Authorization endpoint: agent auth, HMAC, idempotency, voucher | ⬜ |
 | 6 | Hash-chained audit trail + verification + tamper demo | ⬜ |
@@ -51,46 +51,61 @@ apps/api/src/
   routes/health.test.ts         7 tests incl. an information-disclosure test
 ```
 
-**Verified working:** 25/25 tests green, `tsc --noEmit` clean, migration applied
-and idempotent, checksum tamper detection demonstrated, all four `CHECK`
-constraints proven to reject bad data via raw SQL, server boots and shuts down
-gracefully, request-ID propagation confirmed.
+Added in Phase 2:
+
+```
+apps/api/src/
+  money.ts + money.test.ts        integer paise; exact string parsing; int8
+                                  guard that throws instead of approximating
+  db/types.ts + types.test.ts     pg int8 type-parser registration
+  db/seed.ts                      deterministic, offline, idempotent fixtures
+  db/schema.test.ts               53 schema-guarantee tests (as OWNER)
+  db/roles.test.ts                14 least-privilege tests (as atl_app)
+  db/migrations/
+    0002_identity.sql             users, agents, tools, grants, credentials
+    0003_mandates.sql             mandates + immutable versions + allowlist
+    0004_authorization.sql        requests, decisions, rules, risk, payments
+    0005_audit.sql                audit_events + the atl_app role
+```
+
+**Verified working:** 118 tests green (twice in a row, leaving no residue),
+`tsc --noEmit` clean, 5 migrations applied and idempotent, checksum tamper
+detection demonstrated, every constraint and trigger proven by attacking it,
+least privilege proven by connecting as the real runtime role, seed idempotent,
+service boots as `atl_app`.
 
 **Environment:** Node 24.13, TypeScript 7.0.2, Vitest 5, Fastify 5.12,
-PostgreSQL 16.15 via Homebrew (`brew services`), database `atl_india_dev`,
-owner `darshanajain`.
+PostgreSQL 16.15 via Homebrew (`brew services`), database `atl_india_dev`.
+**Two roles:** owner `darshanajain` (migrations, seed, schema tests) and
+`atl_app` (the service). See `docs/DATABASE.md`.
 
 ---
 
-## Next work unit — Phase 2: core schema
+## Next work unit — Phase 3: mandates
 
-Full design in [`Understanding/PHASE_02_database_schema.md`](../Understanding/PHASE_02_database_schema.md)
-(before-half written). Four migrations:
+Write the before-half of `Understanding/PHASE_03_mandates.md` first, then build.
 
-```
-0002_identity.sql        users, agents, agent_credentials
-0003_mandates.sql        mandates, mandate_versions
-0004_authorization.sql   authorization_requests, decisions,
-                         rule_evaluations, risk_signals, payments
-0005_audit.sql           audit_events + append-only enforcement + atl_app role
-```
+The schema already enforces the hard guarantees (immutable versions, terminal
+revocation, deny-by-default allowlist). Phase 3 is the domain layer and the API
+on top of it:
 
-`products`/`carts` deferred to Phase 8 (catalog); `agent_runs`/`agent_steps` to
-Phase 8 (tracing) — migrating tables before the code that uses them means
-guessing at their columns.
+1. **Domain types** in `packages/core` — `Mandate`, `MandateVersion`, `Money`
+   as branded types. Pure, no I/O, so Phase 4's engine can consume them.
+2. **DTO vs domain model** — the wire shape (rupee strings, ISO dates) is not
+   the internal shape (integer paise, `Date`). Zod at the boundary.
+3. **Repository** — load a mandate with its current version and allowlist in
+   one query; load a *specific* version for re-explaining a past decision.
+4. **API**: `POST /v1/mandates`, `GET /v1/mandates/:id`,
+   `POST /v1/mandates/:id/versions`, `POST /v1/mandates/:id/revoke`.
+5. **Cold-path IFSC lookup** (ADR-0013) — validate an IFSC at mandate
+   creation via Razorpay's public API, with a timeout and graceful
+   degradation. Never on the authorization path.
+6. **First audit events** — `MANDATE_CREATED`, `MANDATE_VERSION_ADDED`,
+   `MANDATE_REVOKED`. Written unchained for now; Phase 6 adds the hash chain.
 
-**Five design decisions, recommendations recorded in the phase file:**
-1. Mandate versioning → **two tables**: `mandates` (identity + lifecycle) +
-   `mandate_versions` (immutable terms, PK `(mandate_id, version)`).
-2. Money → **`BIGINT` paise** with an explicit `int8` parser that throws above
-   `Number.MAX_SAFE_INTEGER`.
-3. Append-only → **`REVOKE` from an `atl_app` role AND a trigger**; they fail
-   independently.
-4. Velocity → **`SELECT … FOR UPDATE` on the mandate row** + derived `SUM()`.
-   Prevents the lost-update breach; needs no retry logic.
-5. Mandate snapshot on `decisions` → **no**, FK to the immutable version row is
-   sufficient. The snapshot belongs in the audit payload, which must be
-   self-contained for hashing.
+Open question to settle in the before-half: does creating a version require
+re-consent from the user, and how is that recorded given the consent-ledger
+gap noted in PHASE_02 §12?
 
 ---
 

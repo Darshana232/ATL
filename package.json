@@ -20,6 +20,7 @@
     "migrate": "npm run migrate -w apps/api",
     "db:start": "brew services start postgresql@16",
     "db:stop": "brew services stop postgresql@16",
-    "db:psql": "psql atl_india_dev"
+    "db:psql": "psql atl_india_dev",
+    "seed": "npm run seed -w apps/api"
   }
 }

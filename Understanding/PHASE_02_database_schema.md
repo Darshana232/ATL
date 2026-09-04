@@ -1,9 +1,12 @@
 # Phase 2 — Database Schema
 
-**Status:** IN PROGRESS (before-half written, awaiting approval)
-**Started:** 2026-09-04 · **Finished:** —
+**Status:** DONE · **Started:** 2026-09-04 · **Finished:** 2026-09-04
+**Result:** 5 migrations, 15 tables, 2 roles, 118 tests passing.
 
-> Sections 1–9 written before any SQL. Sections 10–11 after.
+> Sections 1–9 were written before any SQL; sections 10–12 after. Where the
+> plan turned out to be wrong, the correction is recorded rather than the
+> original being quietly edited — that contrast is the most useful thing in
+> the file.
 
 ---
 
@@ -415,7 +418,69 @@ establishing that Postgres could not cope.
 
 ## 10. What I learned
 
-*(after the phase)*
+**The database can hold guarantees that code cannot.** This is the phase's big
+idea. Six things are now true regardless of what our application does:
+mandate terms cannot be rewritten, a revoked mandate cannot be revived, a
+payment cannot move backwards through its lifecycle, a voucher cannot be
+redeemed twice, an audit event cannot be altered, and the application cannot
+delete anything at all. None of these depends on a code review catching a
+mistake.
+
+**`CHECK` means "must not be FALSE", not "must be TRUE".** SQL is
+three-valued, so a constraint whose expression evaluates to NULL *passes*.
+`array_length(ARRAY[]::text[], 1)` is NULL, which is how an empty weekday list
+slipped through. `cardinality()` returns 0. For every `CHECK` I write now, the
+first question is what it does when an input is NULL or empty.
+
+**`TRUNCATE` does not fire row-level triggers.** An append-only guard built
+only on `BEFORE UPDATE OR DELETE ... FOR EACH ROW` is bypassable by one
+statement. Needs a statement-level `BEFORE TRUNCATE` trigger — and since
+`TRUNCATE` requires ownership, the role separation is what actually closes it.
+
+**Least privilege is testable, and that changes it from a claim to a
+property.** `roles.test.ts` connects as the real runtime role and proves ten
+things it cannot do. Before writing it, "the app can't tamper with the audit
+trail" was an intention; afterwards it is a fact with a failing test attached
+if it stops being one.
+
+**Two enforcement layers must be tested separately.** As `atl_app`, an
+`UPDATE` on an append-only table is refused at the *permission* layer (42501)
+before any trigger runs — so a test suite that only ever connects as the app
+role can never tell you whether the trigger works, and vice versa. One
+guarantee, two tests, two roles, two files.
+
+**Reference what you can reconstruct; store what you cannot.** `decisions`
+points at immutable mandate terms via a foreign key (recoverable forever) but
+*copies* `spent_before_paise` (not recoverable — refunds and later payments
+change it). Getting this distinction right is the difference between a
+normalised schema and a lossy one.
+
+**Denormalise only when three conditions hold**: the value is on a hot path,
+it is immutable for the row's lifetime, and a foreign key prevents it being
+wrong. `payments.mandate_id` meets all three; almost nothing else does.
+
+**A foreign key can prevent a bug that is otherwise invisible.** A typo'd
+merchant in a `TEXT[]` allowlist becomes a permanent silent BLOCK whose verdict
+reads as correct behaviour. With a join table and an FK, the typo is refused at
+write time, in front of a human.
+
+**Money is integers, and the JS driver will hand you strings.**
+`node-postgres` returns `BIGINT` as a string deliberately; `Number()` works up
+to 2^53 and then silently lies. `0.1 + 0.2 !== 0.3` stops being trivia the
+moment it is someone's money.
+
+**Never store state that time invalidates.** An `'expired'` status needs a cron
+job to stay truthful, and until it runs the row is a lie. Compute expiry from
+`valid_to` at decision time.
+
+**Transaction-rollback isolation.** Wrapping each test in `BEGIN` /`ROLLBACK`
+gives perfect isolation with zero cleanup — and it is the only workable
+approach here, because append-only tables cannot be emptied by design.
+`SAVEPOINT` lets a test continue after an expected failure, since a failed
+statement otherwise aborts the whole transaction.
+
+**Assert the reason, not the failure.** Specific SQLSTATEs and constraint names
+caught three bugs this phase that "expect it to throw" would have hidden.
 
 ## 11. Mistakes made & why
 
@@ -532,7 +597,23 @@ existing function, trace the paths that reach it — do not assume the bottom of
 a function is always reached. Caught only because the test asserted `ATL02`
 rather than "some error".
 
-**Meta-observation across mistakes 3–6.** Mistake 3 changed the tests to assert
+**7. My tests assumed an empty database, and the seed script broke 52 of
+them.** `seedBaseline` inserted a merchant with id `mer_bigbasket`. That was
+fine for as long as the database was empty — and then `npm run seed` created
+the same merchant, the fixture insert hit a unique violation, the transaction
+aborted, and **52 tests failed for a reason that had nothing to do with what
+any of them was testing**.
+
+*Why it happened:* I wrote fixtures using realistic ids because they read
+nicely, without asking what else might own that id.
+*Lesson:* **test fixtures need their own id namespace** (`*_test*` here) and
+must never reuse ids that seed or production data might also use. More
+generally: a test that only passes on an empty database is a test with a hidden
+precondition, and it will fail later at the least convenient moment. The
+symptom is also worth remembering — 52 simultaneous failures with unrelated
+messages usually means one shared fixture broke, not 52 bugs.
+
+**Meta-observation across mistakes 3–7.** Mistake 3 changed the tests to assert
 specific SQLSTATEs and constraint names, and that change immediately paid for
 itself twice: the `TRUNCATE` test would have "passed" against the wrong error
 code, and the empty-weekday bug was only visible because the assertion named
@@ -553,3 +634,31 @@ they actively hide them.
 - **Deferred tables** — `products`, `carts`, `agent_runs`, `agent_steps` — will
   need FKs into these tables. Worth sanity-checking now that the identity
   columns they will reference are stable.
+
+### Added during the phase
+
+- **No transaction history is seeded**, deliberately. Hand-written decisions
+  and rule evaluations would be fabricated evidence that does not match what
+  the engine actually produces — fake audit records, in a project whose point
+  is authentic ones. Phases 4–5 generate history by running the real engine.
+  Consequence: velocity and spend logic has no data to exercise until then.
+- **`atl_app` has no password.** Local Homebrew PostgreSQL uses trust
+  authentication. Fine locally; a real deployment must assign credentials out
+  of band, and Phase 12 has to handle that rather than inheriting this.
+- **The consent record is one timestamp plus a purpose**, which cannot express
+  withdrawal. A proper DPDP consent ledger (grants and withdrawals over time,
+  append-only) is Phase 10 work. Recording it now so the Phase 10 report does
+  not overstate what the schema supports.
+- **`mandate_versions.signature` is nullable and unused.** Signing arrives in
+  Phase 5/6 with the key handling. Honest nullable column beats a fake value.
+- **`payments` has no `refunded_at`.** `refunded` is a legal target state but
+  the refund flow is unbuilt, so the timestamp column and its `CHECK` are
+  missing. Add them with the refund flow, not before.
+- **The `0A000` discovery**: a plain `TRUNCATE` on `mandate_versions` is
+  refused by the inbound foreign key *before* our trigger runs. Good — a third
+  layer — but it means the trigger is only exercised via `CASCADE` or on a leaf
+  table. Any future append-only table with no inbound FK relies on the trigger
+  alone, so it must be tested directly rather than assumed.
+- **No `EXPLAIN ANALYZE` run yet** on the hot-path spend query. The index
+  exists and is shaped correctly, but "shaped correctly" is a belief until the
+  planner confirms it. Do this in Phase 4 with real rows, and record the plan.

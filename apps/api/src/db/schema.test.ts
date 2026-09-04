@@ -111,10 +111,21 @@ async function captureError(
 
 const SHA256_A = 'a'.repeat(64);
 
+/**
+ * Minimal valid rows, in a TEST-ONLY ID NAMESPACE (`*_test*`).
+ *
+ * Never reuse ids that seed data or production data might also use. An earlier
+ * version of this file inserted 'mer_bigbasket' - which was fine until
+ * `npm run seed` created that same merchant, at which point the insert hit a
+ * unique violation, aborted the transaction, and 52 tests failed for a reason
+ * that had nothing to do with what they were testing.
+ *
+ * Tests must not assume an empty database.
+ */
 async function seedBaseline(client: pg.PoolClient): Promise<void> {
   await client.query(
     `INSERT INTO merchants (id, legal_name, display_name, mcc, category)
-     VALUES ('mer_bigbasket', 'Supermarket Grocery Supplies Pvt Ltd', 'BigBasket', '5411', 'groceries')`,
+     VALUES ('mer_test_shop', 'Test Grocery Supplies Pvt Ltd', 'Test Grocer', '5411', 'groceries')`,
   );
   await client.query(
     `INSERT INTO users (id, external_ref_hash, display_name)
@@ -486,7 +497,7 @@ describe('merchant allowlist integrity', () => {
       const error = await captureError(
         client,
         `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
-         VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+         VALUES ('mnd_test', 1, 'mer_test_shop')`,
       );
 
       expect(error).toBeNull();
@@ -520,7 +531,7 @@ describe('merchant allowlist integrity', () => {
       const error = await captureError(
         client,
         `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
-         VALUES ('mnd_test', 99, 'mer_bigbasket')`,
+         VALUES ('mnd_test', 99, 'mer_test_shop')`,
       );
 
       expect(error?.code).toBe(SQLSTATE.FOREIGN_KEY_VIOLATION);
@@ -533,12 +544,12 @@ describe('merchant allowlist integrity', () => {
       await insertVersion(client);
       await client.query(
         `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
-         VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+         VALUES ('mnd_test', 1, 'mer_test_shop')`,
       );
 
       const updated = await captureError(
         client,
-        `UPDATE mandate_version_merchants SET merchant_id='mer_bigbasket' WHERE mandate_id='mnd_test'`,
+        `UPDATE mandate_version_merchants SET merchant_id='mer_test_shop' WHERE mandate_id='mnd_test'`,
       );
       expect(updated?.code).toBe(SQLSTATE.APPEND_ONLY);
 
@@ -558,10 +569,10 @@ describe('merchant allowlist integrity', () => {
       await insertVersion(client);
       await client.query(
         `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
-         VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+         VALUES ('mnd_test', 1, 'mer_test_shop')`,
       );
 
-      const error = await captureError(client, `DELETE FROM merchants WHERE id='mer_bigbasket'`);
+      const error = await captureError(client, `DELETE FROM merchants WHERE id='mer_test_shop'`);
       expect(error?.code).toBe(SQLSTATE.FOREIGN_KEY_VIOLATION);
     });
   });
@@ -577,7 +588,7 @@ async function seedThroughVersion(client: pg.PoolClient): Promise<void> {
   await insertVersion(client, { version: 1 });
   await client.query(
     `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
-     VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+     VALUES ('mnd_test', 1, 'mer_test_shop')`,
   );
 }
 
@@ -591,7 +602,7 @@ async function insertRequest(
     mandate_version: 1,
     agent_id: 'agt_test',
     signature_verified: true,
-    merchant_id: 'mer_bigbasket',
+    merchant_id: 'mer_test_shop',
     amount_paise: 124000, // ₹1,240
     payment_method: 'upi_reserve_pay',
     idempotency_key: 'idem_test_000001',

@@ -45,3 +45,9 @@ Thumbs.db
 # add them, go in .claude/settings.json (without .local) and ARE committed.
 # ---------------------------------------------------------------------------
 .claude/settings.local.json
+
+# ---------------------------------------------------------------------------
+# Seed-generated agent private keys. Development only, but still private keys:
+# never committed. Regenerate with `npm run seed -- --rotate-keys`.
+# ---------------------------------------------------------------------------
+.seed-keys.json
