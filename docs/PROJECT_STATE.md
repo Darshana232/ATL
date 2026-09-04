@@ -3,7 +3,13 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-04 · **Current phase:** 1 complete, 2 not started
+**Last updated:** 2026-09-04 · **Current phase:** 1 complete, 2 design approved pending
+
+Two documentation sets, different audiences:
+- `docs/` — how it works and what was decided (operate/extend)
+- `Understanding/` — why it works and what building it taught (learn/explain).
+  Each `PHASE_xx` file is written in two halves: sections 1–9 before the phase,
+  10–12 after. **An empty section 10/11 means the phase is not done.**
 
 ---
 
@@ -58,22 +64,33 @@ owner `darshanajain`.
 
 ## Next work unit — Phase 2: core schema
 
-Design and migrate the remaining domain tables, then seed deliberately messy
-fixture data.
+Full design in [`Understanding/PHASE_02_database_schema.md`](../Understanding/PHASE_02_database_schema.md)
+(before-half written). Four migrations:
 
-Tables: `users`, `agents`, `agent_credentials`, `mandates` (versioned),
-`products`, `carts`, `cart_items`, `authorization_requests`, `decisions`,
-`rule_evaluations`, `payments`, `audit_events`, `risk_signals`, `agent_runs`,
-`agent_steps`.
+```
+0002_identity.sql        users, agents, agent_credentials
+0003_mandates.sql        mandates, mandate_versions
+0004_authorization.sql   authorization_requests, decisions,
+                         rule_evaluations, risk_signals, payments
+0005_audit.sql           audit_events + append-only enforcement + atl_app role
+```
 
-Design conversations to have **before** writing SQL:
-1. Mandate versioning — new row per version vs. current + history table.
-2. Money representation — integer paise everywhere, never floats.
-3. Which tables are append-only, and how immutability is enforced per table.
-4. Velocity counting — derive from `payments` vs. maintain a counter (and the
-   transaction-isolation consequences of each).
-5. Whether `decisions` stores a denormalised snapshot of the mandate it judged
-   (it should: a decision must remain explainable after the mandate changes).
+`products`/`carts` deferred to Phase 8 (catalog); `agent_runs`/`agent_steps` to
+Phase 8 (tracing) — migrating tables before the code that uses them means
+guessing at their columns.
+
+**Five design decisions, recommendations recorded in the phase file:**
+1. Mandate versioning → **two tables**: `mandates` (identity + lifecycle) +
+   `mandate_versions` (immutable terms, PK `(mandate_id, version)`).
+2. Money → **`BIGINT` paise** with an explicit `int8` parser that throws above
+   `Number.MAX_SAFE_INTEGER`.
+3. Append-only → **`REVOKE` from an `atl_app` role AND a trigger**; they fail
+   independently.
+4. Velocity → **`SELECT … FOR UPDATE` on the mandate row** + derived `SUM()`.
+   Prevents the lost-update breach; needs no retry logic.
+5. Mandate snapshot on `decisions` → **no**, FK to the immutable version row is
+   sufficient. The snapshot belongs in the audit payload, which must be
+   self-contained for hashing.
 
 ---
 
