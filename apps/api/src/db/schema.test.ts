@@ -1,0 +1,575 @@
+/**
+ * Schema guarantees.
+ *
+ * These are integration tests against the real local PostgreSQL, because the
+ * behaviour under test lives in Postgres - constraints, triggers, foreign
+ * keys - not in our code. You cannot unit-test a trigger.
+ *
+ * TWO TESTING TECHNIQUES WORTH LEARNING FROM THIS FILE:
+ *
+ * 1. Isolation by ROLLBACK. Every test runs inside a transaction that is
+ *    always rolled back, so tests cannot see or corrupt each other's rows and
+ *    the database is unchanged afterwards. This matters especially here:
+ *    mandate_versions is append-only, so the usual "DELETE the test rows"
+ *    cleanup is impossible by design.
+ *
+ * 2. Assert the REASON, not merely that it failed. Every expected failure
+ *    checks a specific SQLSTATE and, where applicable, the exact constraint
+ *    name. Earlier in this phase a set of ad-hoc checks all "passed" while
+ *    being rejected by the wrong constraint - eight rejections that looked
+ *    like eight proofs. A test that passes for the wrong reason is worse than
+ *    a failing test, because it manufactures confidence.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type pg from 'pg';
+import { loadConfig, type Config } from '../config.js';
+import { createLogger } from '../logger.js';
+import { closePool, createPool, type Pool } from './pool.js';
+
+const config: Config = loadConfig({ ...process.env, NODE_ENV: 'test', LOG_LEVEL: 'fatal' });
+const logger = createLogger(config);
+
+let pool: Pool;
+
+beforeAll(() => {
+  pool = createPool(config, logger);
+});
+
+afterAll(async () => {
+  await closePool(pool, logger);
+});
+
+/** A PostgreSQL error carries a SQLSTATE and, for constraint failures, its name. */
+type DbError = Error & { code?: string; constraint?: string };
+
+/** PostgreSQL SQLSTATEs we assert on, named so the tests read clearly. */
+const SQLSTATE = {
+  CHECK_VIOLATION: '23514',
+  FOREIGN_KEY_VIOLATION: '23503',
+  UNIQUE_VIOLATION: '23505',
+  /** Our own: append-only table mutation attempted. */
+  APPEND_ONLY: 'ATL01',
+  /** Our own: illegal lifecycle transition. */
+  ILLEGAL_TRANSITION: 'ATL02',
+} as const;
+
+/**
+ * Run a test body inside a transaction that is always rolled back.
+ * Perfect isolation, and no cleanup problem on append-only tables.
+ */
+async function withRollback(body: (client: pg.PoolClient) => Promise<void>): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await body(client);
+  } finally {
+    await client.query('ROLLBACK').catch(() => {
+      /* already aborted; nothing to salvage */
+    });
+    client.release();
+  }
+}
+
+/**
+ * Attempt a statement expected to fail, and return the error for assertion.
+ *
+ * Wrapped in a SAVEPOINT because a failed statement aborts the whole
+ * transaction in PostgreSQL - without this, the test could not run another
+ * query afterwards. Returns null when the statement unexpectedly SUCCEEDS, so
+ * a missing failure surfaces as a clear assertion error.
+ */
+async function captureError(
+  client: pg.PoolClient,
+  sql: string,
+  params: unknown[] = [],
+): Promise<DbError | null> {
+  await client.query('SAVEPOINT probe');
+  try {
+    await client.query(sql, params);
+    await client.query('RELEASE SAVEPOINT probe');
+    return null;
+  } catch (error) {
+    await client.query('ROLLBACK TO SAVEPOINT probe');
+    return error as DbError;
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+/* Fixture builders - minimal valid rows, so each test changes one thing.   */
+/* ------------------------------------------------------------------------ */
+
+const SHA256_A = 'a'.repeat(64);
+
+async function seedBaseline(client: pg.PoolClient): Promise<void> {
+  await client.query(
+    `INSERT INTO merchants (id, legal_name, display_name, mcc, category)
+     VALUES ('mer_bigbasket', 'Supermarket Grocery Supplies Pvt Ltd', 'BigBasket', '5411', 'groceries')`,
+  );
+  await client.query(
+    `INSERT INTO users (id, external_ref_hash, display_name)
+     VALUES ('usr_test', $1, 'Test User')`,
+    [SHA256_A],
+  );
+  await client.query(
+    `INSERT INTO agents (id, display_name, vendor, agent_version)
+     VALUES ('agt_test', 'Test Shopper', 'anthropic', '1.0.0')`,
+  );
+  await client.query(
+    `INSERT INTO mandates (id, user_id, agent_id, label)
+     VALUES ('mnd_test', 'usr_test', 'agt_test', 'Weekly groceries')`,
+  );
+}
+
+/** A valid version row. Overrides let a test break exactly one field. */
+async function insertVersion(
+  client: pg.PoolClient,
+  overrides: Record<string, unknown> = {},
+): Promise<DbError | null> {
+  const values: Record<string, unknown> = {
+    mandate_id: 'mnd_test',
+    version: 1,
+    per_txn_limit_paise: 200000, // ₹2,000
+    window_limit_paise: 500000, // ₹5,000
+    window_kind: 'week',
+    max_txn_per_hour: 5,
+    valid_from: '2026-09-01T00:00:00Z',
+    valid_to: '2026-12-31T23:59:59Z',
+    created_by: 'test',
+    ...overrides,
+  };
+
+  const columns = Object.keys(values);
+  const placeholders = columns.map((_, index) => `$${index + 1}`);
+
+  return captureError(
+    client,
+    `INSERT INTO mandate_versions (${columns.join(', ')}) VALUES (${placeholders.join(', ')})`,
+    Object.values(values),
+  );
+}
+
+/* ======================================================================== */
+describe('mandate_versions is append-only', () => {
+  it('accepts a new version (appending must still work)', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      expect(await insertVersion(client, { version: 1 })).toBeNull();
+      expect(await insertVersion(client, { version: 2, per_txn_limit_paise: 500000 })).toBeNull();
+
+      const { rows } = await client.query<{ count: number }>(
+        `SELECT count(*)::bigint AS count FROM mandate_versions WHERE mandate_id = 'mnd_test'`,
+      );
+      expect(rows[0]?.count).toBe(2);
+    });
+  });
+
+  it('REFUSES to UPDATE an existing version', async () => {
+    // The central guarantee of Phase 2. If this ever passes, a past decision
+    // can be silently re-justified against terms it never judged.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client);
+
+      const error = await captureError(
+        client,
+        `UPDATE mandate_versions SET per_txn_limit_paise = 999999 WHERE mandate_id = 'mnd_test'`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.APPEND_ONLY);
+      expect(error?.message).toMatch(/append-only/i);
+    });
+  });
+
+  it('REFUSES to DELETE a version', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client);
+
+      const error = await captureError(
+        client,
+        `DELETE FROM mandate_versions WHERE mandate_id = 'mnd_test'`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.APPEND_ONLY);
+    });
+  });
+
+  it('REFUSES to TRUNCATE - three independent layers', async () => {
+    // TRUNCATE does not fire row-level triggers, so the UPDATE/DELETE guard
+    // above does not cover it. Without a statement-level trigger, one
+    // TRUNCATE would erase every version silently.
+    await withRollback(async (client) => {
+      // Layer 1: a plain TRUNCATE is refused by the foreign key from
+      // mandate_version_merchants, BEFORE any trigger runs.
+      // 0A000 = feature_not_supported ("cannot truncate a table referenced in
+      // a foreign key constraint"). Asserted explicitly, because an earlier
+      // version of this test expected ATL01 here and would have "passed" for
+      // the wrong reason had it not checked the code.
+      const viaForeignKey = await captureError(client, `TRUNCATE mandate_versions`);
+      expect(viaForeignKey?.code).toBe('0A000');
+
+      // Layer 2: CASCADE gets past the foreign key, and then our
+      // statement-level trigger stops it.
+      const viaCascade = await captureError(client, `TRUNCATE mandate_versions CASCADE`);
+      expect(viaCascade?.code).toBe(SQLSTATE.APPEND_ONLY);
+      expect(viaCascade?.message).toMatch(/TRUNCATE is not permitted/i);
+
+      // Layer 3: the leaf table has no inbound foreign key, so the trigger is
+      // the ONLY thing standing between it and deletion.
+      const leaf = await captureError(client, `TRUNCATE mandate_version_merchants`);
+      expect(leaf?.code).toBe(SQLSTATE.APPEND_ONLY);
+    });
+  });
+
+  it('keeps superseded terms readable - THE product guarantee', async () => {
+    // A decision made against version 1 must remain explainable after the
+    // user raises their limit. This test is the reason the whole two-table
+    // split exists.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client, { version: 1, per_txn_limit_paise: 200000 });
+      await insertVersion(client, { version: 2, per_txn_limit_paise: 500000 });
+
+      const v1 = await client.query<{ per_txn_limit_paise: number }>(
+        `SELECT per_txn_limit_paise FROM mandate_versions
+         WHERE mandate_id = 'mnd_test' AND version = 1`,
+      );
+      // Still ₹2,000 - the old terms were not rewritten by the new ones.
+      expect(v1.rows[0]?.per_txn_limit_paise).toBe(200000);
+
+      // And "current" is derived, not stored, so it cannot drift.
+      const current = await client.query<{ version: number }>(
+        `SELECT version FROM mandate_versions
+         WHERE mandate_id = 'mnd_test' ORDER BY version DESC LIMIT 1`,
+      );
+      expect(current.rows[0]?.version).toBe(2);
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('mandate lifecycle', () => {
+  it('allows active -> revoked when fully recorded', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await captureError(
+        client,
+        `UPDATE mandates
+            SET status = 'revoked', revoked_at = now(),
+                revoked_by = 'usr_test', revoked_reason = 'user withdrew consent'
+          WHERE id = 'mnd_test'`,
+      );
+
+      expect(error).toBeNull();
+    });
+  });
+
+  it('REFUSES revoked -> active (revocation is terminal)', async () => {
+    // Reviving a revoked mandate would make its audit trail ambiguous about
+    // which period was actually authorised. Resuming delegation is a NEW
+    // mandate, not a state change.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await client.query(
+        `UPDATE mandates SET status='revoked', revoked_at=now(),
+                revoked_by='usr_test', revoked_reason='test'
+          WHERE id='mnd_test'`,
+      );
+
+      const error = await captureError(
+        client,
+        `UPDATE mandates SET status='active', revoked_at=NULL,
+                revoked_by=NULL, revoked_reason=NULL
+          WHERE id='mnd_test'`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.ILLEGAL_TRANSITION);
+      expect(error?.message).toMatch(/terminal/i);
+    });
+  });
+
+  it('REFUSES to re-attribute a mandate to a different user', async () => {
+    // Otherwise a mandate's entire audit history could be silently moved to
+    // another person.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await client.query(
+        `INSERT INTO users (id, external_ref_hash, display_name)
+         VALUES ('usr_other', $1, 'Other')`,
+        ['b'.repeat(64)],
+      );
+
+      const error = await captureError(
+        client,
+        `UPDATE mandates SET user_id='usr_other' WHERE id='mnd_test'`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.ILLEGAL_TRANSITION);
+      expect(error?.message).toMatch(/immutable/i);
+    });
+  });
+
+  it('REFUSES a revocation missing its reason', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await captureError(
+        client,
+        `UPDATE mandates SET status='revoked', revoked_at=now(), revoked_by='usr_test'
+          WHERE id='mnd_test'`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.CHECK_VIOLATION);
+      expect(error?.constraint).toBe('mandates_revocation_complete');
+    });
+  });
+
+  it('REFUSES revocation fields on a still-active mandate', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await captureError(
+        client,
+        `UPDATE mandates SET revoked_reason='sneaky' WHERE id='mnd_test'`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.CHECK_VIOLATION);
+      expect(error?.constraint).toBe('mandates_revocation_fields_only_when_revoked');
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('mandate terms cannot be incoherent', () => {
+  it('REFUSES a per-transaction limit above the window limit', async () => {
+    // Incoherent: the second transaction could never succeed. Rejecting it
+    // here means the policy engine never has to reason about a contradiction.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await insertVersion(client, {
+        per_txn_limit_paise: 900000,
+        window_limit_paise: 500000,
+      });
+
+      expect(error?.code).toBe(SQLSTATE.CHECK_VIOLATION);
+      expect(error?.constraint).toBe('mandate_versions_per_txn_within_window');
+    });
+  });
+
+  it('REFUSES a zero or negative limit', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const zero = await insertVersion(client, { per_txn_limit_paise: 0 });
+      expect(zero?.constraint).toBe('mandate_versions_per_txn_limit_positive');
+
+      const negative = await insertVersion(client, { per_txn_limit_paise: -100 });
+      expect(negative?.constraint).toBe('mandate_versions_per_txn_limit_positive');
+    });
+  });
+
+  it('REFUSES a non-MCC value inside blocked_mccs (domain check per element)', async () => {
+    // MCC-based blocking is only meaningful if every entry really is an MCC.
+    // 'alcohol' as a category string would match nothing and silently block
+    // nothing.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await insertVersion(client, { blocked_mccs: ['5921', 'alcohol'] });
+
+      expect(error?.code).toBe(SQLSTATE.CHECK_VIOLATION);
+      expect(error?.constraint).toBe('mcc_code_is_four_digits');
+    });
+  });
+
+  it('accepts a valid blocked-MCC list', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      // 5921 liquor, 7995 gambling, 5993 tobacco
+      expect(await insertVersion(client, { blocked_mccs: ['5921', '7995', '5993'] })).toBeNull();
+    });
+  });
+
+  it('REFUSES a misspelled weekday', async () => {
+    // A typo would silently narrow the permitted window instead of erroring.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await insertVersion(client, { allowed_weekdays: ['MON', 'FUNDAY'] });
+
+      expect(error?.code).toBe(SQLSTATE.CHECK_VIOLATION);
+      expect(error?.constraint).toBe('mandate_versions_weekdays_valid');
+    });
+  });
+
+  it('REFUSES an empty weekday list', async () => {
+    // An empty list is not "any day"; it is a mandate that can never fire.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      const error = await insertVersion(client, { allowed_weekdays: [] });
+      expect(error?.constraint).toBe('mandate_versions_weekdays_valid');
+    });
+  });
+
+  it('REFUSES an unknown payment method', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      const error = await insertVersion(client, { payment_methods: ['crypto'] });
+      expect(error?.constraint).toBe('mandate_versions_payment_methods_valid');
+    });
+  });
+
+  it('REFUSES validity that ends before it starts', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+
+      const error = await insertVersion(client, {
+        valid_from: '2026-12-01T00:00:00Z',
+        valid_to: '2026-09-01T00:00:00Z',
+      });
+
+      expect(error?.constraint).toBe('mandate_versions_validity_ordered');
+    });
+  });
+
+  it('REFUSES a time window that ends before it starts', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      const error = await insertVersion(client, { window_start_hour: 20, window_end_hour: 8 });
+      expect(error?.constraint).toBe('mandate_versions_window_hours_valid');
+    });
+  });
+
+  it('REFUSES a signature without the key that produced it', async () => {
+    // An unverifiable signature is worse than none: it looks like evidence.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      const error = await insertVersion(client, { signature: 'sig_abc' });
+      expect(error?.constraint).toBe('mandate_versions_signature_complete');
+    });
+  });
+
+  it('REFUSES a duplicate version number for the same mandate', async () => {
+    // Concurrent attempts to create "the next version" collide here, which
+    // fails loudly instead of corrupting the sequence.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client, { version: 1 });
+
+      const error = await insertVersion(client, { version: 1 });
+      expect(error?.code).toBe(SQLSTATE.UNIQUE_VIOLATION);
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('merchant allowlist integrity', () => {
+  it('accepts an allowlist entry for a real merchant and version', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client);
+
+      const error = await captureError(
+        client,
+        `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
+         VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+      );
+
+      expect(error).toBeNull();
+    });
+  });
+
+  it('REFUSES allowlisting a merchant that does not exist', async () => {
+    // THE reason this is a join table rather than a TEXT[]. In an array, a
+    // typo becomes a permanent silent BLOCK: the agent is refused forever and
+    // the verdict reads as correct behaviour ("merchant not in allowlist"),
+    // with nothing indicating the allowlist itself is wrong.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client);
+
+      const error = await captureError(
+        client,
+        `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
+         VALUES ('mnd_test', 1, 'mer_bigbaskt')`, // typo
+      );
+
+      expect(error?.code).toBe(SQLSTATE.FOREIGN_KEY_VIOLATION);
+    });
+  });
+
+  it('REFUSES an allowlist entry for a version that does not exist', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client, { version: 1 });
+
+      const error = await captureError(
+        client,
+        `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
+         VALUES ('mnd_test', 99, 'mer_bigbasket')`,
+      );
+
+      expect(error?.code).toBe(SQLSTATE.FOREIGN_KEY_VIOLATION);
+    });
+  });
+
+  it('is append-only', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client);
+      await client.query(
+        `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
+         VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+      );
+
+      const updated = await captureError(
+        client,
+        `UPDATE mandate_version_merchants SET merchant_id='mer_bigbasket' WHERE mandate_id='mnd_test'`,
+      );
+      expect(updated?.code).toBe(SQLSTATE.APPEND_ONLY);
+
+      const deleted = await captureError(
+        client,
+        `DELETE FROM mandate_version_merchants WHERE mandate_id='mnd_test'`,
+      );
+      expect(deleted?.code).toBe(SQLSTATE.APPEND_ONLY);
+    });
+  });
+
+  it('REFUSES deleting a merchant that a mandate still allowlists', async () => {
+    // ON DELETE RESTRICT. Removing the merchant would orphan the terms a past
+    // decision was judged against.
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client);
+      await client.query(
+        `INSERT INTO mandate_version_merchants (mandate_id, version, merchant_id)
+         VALUES ('mnd_test', 1, 'mer_bigbasket')`,
+      );
+
+      const error = await captureError(client, `DELETE FROM merchants WHERE id='mer_bigbasket'`);
+      expect(error?.code).toBe(SQLSTATE.FOREIGN_KEY_VIOLATION);
+    });
+  });
+});
+
+/* ======================================================================== */
+describe('money columns round-trip exactly', () => {
+  it('stores and returns paise as an exact integer', async () => {
+    await withRollback(async (client) => {
+      await seedBaseline(client);
+      await insertVersion(client, { per_txn_limit_paise: 487050 });
+
+      const { rows } = await client.query<{ per_txn_limit_paise: number }>(
+        `SELECT per_txn_limit_paise FROM mandate_versions WHERE mandate_id='mnd_test'`,
+      );
+
+      // A number, not a string: our int8 parser is registered.
+      expect(typeof rows[0]?.per_txn_limit_paise).toBe('number');
+      expect(rows[0]?.per_txn_limit_paise).toBe(487050);
+    });
+  });
+});

@@ -469,6 +469,51 @@ This is why section 7 lists the *failure each test prevents* rather than just
 the test name — a test whose purpose you cannot state is a test that can pass
 vacuously.
 
+**4. `TRUNCATE` bypasses row-level triggers entirely — I nearly shipped a hole
+big enough to erase the audit trail.** The append-only guard was
+`BEFORE UPDATE OR DELETE ... FOR EACH ROW`. Probed it: a table with that
+trigger is emptied by `TRUNCATE` with **no error and no trigger invocation**.
+One `TRUNCATE audit_events;` would have erased everything while the guard
+stayed silent, which would make the tamper-evidence claim hollow.
+
+Fixed with a second, **statement-level** `BEFORE TRUNCATE` trigger. The
+verification now asserts three independent layers: the foreign key refuses a
+plain `TRUNCATE` (SQLSTATE `0A000`) before any trigger runs, the statement
+trigger catches `TRUNCATE ... CASCADE`, and on the leaf table the trigger is
+the only thing standing in the way.
+
+*Why it happened:* I enumerated the obvious mutations (UPDATE, DELETE) rather
+than asking "what else can empty a table?"
+*Lesson:* for a guarantee, enumerate the **operations** the database offers,
+not the ones you happen to think of. It also sharpened why the role half of the
+defence is not optional: `TRUNCATE` requires table ownership, so keeping the
+application away from owner privileges is what makes the trigger's remaining
+gap unreachable.
+
+**5. `array_length` returns NULL for an empty array, and a CHECK constraint
+PASSES on NULL.** The weekday constraint read
+`array_length(allowed_weekdays, 1) >= 1`. For `ARRAY[]::text[]`,
+`array_length` is **NULL**, so the expression evaluated to NULL — and SQL's
+three-valued logic means a CHECK only fails when it evaluates to **FALSE**, not
+when it is unknown. An empty weekday list was therefore silently accepted,
+producing a mandate that can never legally fire. Same bug in the
+payment-methods constraint.
+
+Fixed by using `cardinality()`, which returns 0 for an empty array.
+
+*Why it happened:* I read `CHECK` as "this must be true". It actually means
+"this must not be false".
+*Lesson:* in any `CHECK`, ask what the expression does when an input is NULL or
+empty. This is the single most common source of constraints that quietly do
+nothing.
+
+**Meta-observation across mistakes 3–5.** Mistake 3 changed the tests to assert
+specific SQLSTATEs and constraint names, and that change immediately paid for
+itself twice: the `TRUNCATE` test would have "passed" against the wrong error
+code, and the empty-weekday bug was only visible because the assertion named
+the constraint it expected. Vague assertions do not just fail to catch bugs —
+they actively hide them.
+
 ## 12. Open questions / debt
 
 - **Mandate cryptographic signatures.** `mandate_versions` will have a
