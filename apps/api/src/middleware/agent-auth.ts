@@ -65,8 +65,7 @@ type RejectReason =
   | 'credential_revoked'
   | 'credential_expired'
   | 'agent_not_active'
-  | 'bad_signature'
-  | 'missing_body';
+  | 'bad_signature';
 
 /**
  * Header values must be single-line, printable and bounded.
@@ -203,8 +202,18 @@ export function requireAgentSignature(deps: AgentAuthDeps) {
       return reject(reason, null, keyId);
     }
 
-    const rawBody = request.rawBody;
-    if (typeof rawBody !== 'string') return reject('missing_body', null, keyId);
+    /**
+     * A GET carries no body, so there is nothing for the content-type parser to
+     * capture and `rawBody` is undefined. Signing the EMPTY STRING is the
+     * well-defined answer, and both sides do the same thing.
+     *
+     * Found by the first GET /v1/payments/:id test, which returned 401 for a
+     * perfectly valid signature: the guard had been written against POST only.
+     * `?? ''` rather than skipping the body hash entirely, because the hash must
+     * always be present in the signing string - a scheme where one line
+     * sometimes disappears is a scheme with two shapes.
+     */
+    const rawBody = request.rawBody ?? '';
 
     const credential = await findCredentialByKeyId(deps.pool, keyId);
     if (credential === null) return reject('unknown_key', null, keyId);

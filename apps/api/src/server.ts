@@ -18,6 +18,9 @@ import { healthRoutes } from './routes/health.js';
 import { mandateRoutes } from './routes/mandates.js';
 import { authorizeRoutes } from './routes/authorize.js';
 import { auditRoutes } from './routes/audit.js';
+import { paymentRoutes } from './routes/payments.js';
+import { webhookRoutes } from './routes/webhooks.js';
+import { selectPaymentProvider, type PaymentProvider } from './providers/payment.js';
 import { RazorpayIfscProvider, type BankLookupProvider } from './providers/bank-lookup.js';
 import { MockRiskProvider, type RiskProvider } from './providers/risk.js';
 
@@ -39,6 +42,12 @@ export interface ServerDependencies {
   risk?: RiskProvider;
   /** Injectable clock for the authorization path. Tests drive time directly. */
   now?: () => Date;
+  /**
+   * Payment execution. Defaults to the SIMULATED mock UPI rail unless Razorpay
+   * TEST-mode keys are configured - so nothing ever calls an external payment
+   * API by accident, from a test suite or a demo.
+   */
+  payments?: PaymentProvider;
 }
 
 /**
@@ -55,6 +64,7 @@ export function buildServer({
   bankLookup,
   risk,
   now,
+  payments,
 }: ServerDependencies): FastifyInstance {
   const app = Fastify({
     /**
@@ -113,19 +123,29 @@ export function buildServer({
       const text = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
       request.rawBody = text;
 
+      /**
+       * NEVER FAILS. Malformed JSON yields `undefined` as the parsed body, and
+       * the route's own validation produces the 400.
+       *
+       * WHY: an earlier version called `done(error)` with statusCode 400 on a
+       * parse failure - which meant a request with a FORGED SIGNATURE and a
+       * broken body got 400 (a parser error) instead of 401 (rejected). The
+       * parser was running before authentication, which is the exact ordering
+       * this design exists to avoid. Caught by a webhook test.
+       *
+       * Authenticate first, interpret second: the signature is computed over
+       * the raw bytes, so it does not need the body to be valid JSON, and an
+       * unauthenticated caller should never reach a parser's error path.
+       */
       if (text.trim() === '') {
-        // An empty body is valid JSON to nobody. Signalled as a 400, with the
-        // raw text still recorded so the signature check can run first.
         done(null, undefined);
         return;
       }
 
       try {
         done(null, JSON.parse(text) as unknown);
-      } catch (error) {
-        const failure = error as Error & { statusCode?: number };
-        failure.statusCode = 400;
-        done(failure, undefined);
+      } catch {
+        done(null, undefined);
       }
     },
   );
@@ -148,6 +168,15 @@ export function buildServer({
     }),
   );
   app.register(auditRoutes({ pool, config, now }));
+  app.register(
+    paymentRoutes({
+      pool,
+      config,
+      provider: payments ?? selectPaymentProvider(config),
+      now,
+    }),
+  );
+  app.register(webhookRoutes({ pool, config }));
 
   /* --- 404 -------------------------------------------------------------- */
   app.setNotFoundHandler((request, reply) => {
