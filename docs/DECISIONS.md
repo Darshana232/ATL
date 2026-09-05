@@ -620,3 +620,76 @@ production anyway.
 run against the real API. The provider is written against the documented
 contract and exercised with the mock. Until keys exist, nothing may claim we
 have called Razorpay successfully.
+
+---
+
+## ADR-0022 — Control coverage must include controls we have NOT built
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** The FREE-AI coverage report's in-scope set includes six controls
+we have deliberately **not** implemented, each with the reason and where it is
+planned. Coverage is reported as **20/26**, a ratio, never a percentage.
+
+**Context.** The first implementation listed only controls already built and
+returned **20/20 with zero gaps**. Every individual control was honest — real
+evidence, real queries, stated limitations. **The dishonesty was in the
+selection**, which no individual check could catch: the number was guaranteed
+before a single query ran.
+
+**Reasoning.** A coverage report over a self-selected set of successes is the
+same species of claim as the research's "98.75% compliant", just with better
+manners. A number that cannot move is not a measurement. Putting the gaps in
+scope makes it one — and the gaps are rendered *above* the covered controls in
+the UI, unsuppressed and not collapsible.
+
+**A ratio, not a percentage.** "20/26" invites "which six?", which is the
+question a compliance officer should be asking. "77%" invites nothing and
+implies a denominator somebody else agreed to. FREE-AI is a committee framework
+with no certifying authority, no audit scheme and no scoring methodology, so no
+such denominator exists.
+
+**Each control carries its own verification query.** If a later refactor removes
+a control, its query stops returning rows and coverage drops by itself. Nobody
+has to remember to update the report — and "remember to update the report" is a
+control that fails silently.
+
+**A failing query is not an empty one.** A control whose evidence query *errors*
+reports `error` and is not counted: it means the thing we thought we were
+measuring no longer exists in the shape we assumed, which is more alarming than
+zero rows.
+
+**Also recorded.** The six unbuilt controls are: consent withdrawal, RBAC for
+human operators, rate limiting, external audit anchoring, independent fraud
+detection, and **validation against real merchant requirements** — which states
+plainly that no merchant interviews have taken place and that quotes in the
+research folder appear to be fabricated (RESEARCH_REALITY_CHECK item 10).
+
+---
+
+## ADR-0023 — Honesty caveats are required response fields, not documentation
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** Every compliance report response carries its caveat as a
+**required field**, and every screen renders it unsuppressed. The standing
+"demonstration implementation" disclaimer lives in the dashboard sidebar.
+
+**Reasoning.** A caveat in a README gets separated from the number the first
+time somebody screenshots a screen. Placement in the sidebar means it appears in
+every screenshot of every screen, which is the only placement that actually
+works. Making it a required field means an API consumer cannot receive the
+figure without receiving the qualification.
+
+**Concretely.** `/v1/reports/free-ai` carries "CONTROL COVERAGE, NOT A
+COMPLIANCE SCORE"; `/v1/reports/str` carries "DRAFT — HUMAN REVIEW REQUIRED"
+plus our non-registration with FIU-IND; `/v1/reports/dpdp` carries the phased
+DPDP timeline and "no merchant is non-compliant today"; `/v1/audit/verify`
+carries "TAMPER-EVIDENT, NOT TAMPER-PROOF" **including on success**, because a
+green banner is exactly what ends up mislabelled.
+
+**Tested negatively.** The suite scans report responses for `%` and the word
+"compliant" and fails if either appears. Those tests exist to fail the moment
+somebody "improves" the wording.
+
+**Tradeoff.** The responses are wordier and the screens are less clean. Accepted:
+`CLAUDE.md` §33 forbids presenting a simulated or unapproved system as a real
+one, and a design that makes the caveat easy to crop is a design that removes it.

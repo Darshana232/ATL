@@ -1,0 +1,276 @@
+/*
+ * ATL-India console design system.
+ *
+ * INFORMATION HIERARCHY IS THE WHOLE JOB. A compliance dashboard exists to make
+ * the EXCEPTION findable. Most decisions pass and nobody needs to look at them,
+ * so the visual system spends its contrast budget on: what broke, what is
+ * flagged, and what is unproven.
+ *
+ * Restraint is deliberate. Fintech tools are read for hours by people making
+ * consequential decisions - saturated colour and decorative motion make that
+ * harder, not easier. Colour carries MEANING here and nothing else: if
+ * something is red, it is a block or a failure.
+ */
+
+:root {
+  /* Neutrals do the structural work. One hue, many steps. */
+  --bg:          #fbfbfd;
+  --surface:     #ffffff;
+  --surface-2:   #f6f7f9;
+  --border:      #e4e6eb;
+  --border-strong: #cdd1d9;
+
+  --text:        #14161a;
+  --text-muted:  #5b616e;
+  --text-faint:  #8b909c;
+
+  /* Semantic colour. Used ONLY for meaning. */
+  --pass:        #0f7b4f;
+  --pass-bg:     #e8f5ee;
+  --flag:        #9a6400;
+  --flag-bg:     #fdf3e0;
+  --block:       #b42318;
+  --block-bg:    #fdeceb;
+  --skip:        #5b616e;
+  --skip-bg:     #f0f1f4;
+  --sim:         #5b46b8;
+  --sim-bg:      #eeebfa;
+
+  --accent:      #1c4ed8;
+  --accent-bg:   #eef2ff;
+
+  --radius:      8px;
+  --radius-sm:   5px;
+
+  /* One shadow, used sparingly. Depth is not a decoration budget. */
+  --shadow: 0 1px 2px rgba(16, 18, 22, 0.04), 0 1px 3px rgba(16, 18, 22, 0.06);
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  /* 14px base: dense tables are the primary content, and 16px wastes a third
+     of the horizontal budget on a screen whose job is comparison. */
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* --- Layout ------------------------------------------------------------ */
+
+.shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 232px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 20px 12px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.brand { padding: 0 10px 18px; }
+.brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.brand-sub { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+
+.nav-group { margin-top: 18px; }
+.nav-label {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-faint);
+  padding: 0 10px; margin-bottom: 6px;
+}
+
+.nav-item {
+  display: block; padding: 7px 10px; border-radius: var(--radius-sm);
+  color: var(--text-muted); font-size: 13px; font-weight: 500;
+}
+.nav-item:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.nav-item[aria-current="page"] { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+
+.main { flex: 1; min-width: 0; padding: 28px 32px 64px; max-width: 1400px; }
+
+.page-header { margin-bottom: 22px; }
+.page-title { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; margin: 0; }
+.page-sub { color: var(--text-muted); margin: 5px 0 0; max-width: 68ch; }
+
+/* --- Cards and metrics -------------------------------------------------- */
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.card + .card { margin-top: 16px; }
+.card-header {
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.card-title { font-size: 13px; font-weight: 650; margin: 0; }
+.card-hint { font-size: 12px; color: var(--text-faint); }
+.card-body { padding: 16px; }
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+
+.metric {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px;
+}
+.metric-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+/* Tabular numerals so digits line up column-to-column. In a table of amounts
+   this is the difference between scanning and reading. */
+.metric-value {
+  font-size: 25px; font-weight: 650; letter-spacing: -0.02em; margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.metric-note { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+
+/* --- Tables ------------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+th {
+  text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-faint);
+  padding: 9px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2); white-space: nowrap;
+}
+td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--surface-2); }
+
+.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--text-muted); }
+.faint { color: var(--text-faint); }
+.nowrap { white-space: nowrap; }
+
+/* --- Status pills ------------------------------------------------------- */
+
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+}
+.pill-pass  { background: var(--pass-bg);  color: var(--pass); }
+.pill-flag  { background: var(--flag-bg);  color: var(--flag); }
+.pill-block { background: var(--block-bg); color: var(--block); }
+.pill-skip  { background: var(--skip-bg);  color: var(--skip); }
+.pill-sim   { background: var(--sim-bg);   color: var(--sim); }
+.pill-info  { background: var(--accent-bg); color: var(--accent); }
+
+/* --- Banners ------------------------------------------------------------ */
+
+.banner {
+  border-radius: var(--radius); padding: 13px 16px; font-size: 13px;
+  border: 1px solid transparent;
+}
+.banner-ok    { background: var(--pass-bg);  border-color: #b7e0ca; color: #0b5c3b; }
+.banner-warn  { background: var(--flag-bg);  border-color: #f0d9a8; color: #7a4f00; }
+.banner-error { background: var(--block-bg); border-color: #f3bdb8; color: #8f1d14; }
+.banner-info  { background: var(--surface-2); border-color: var(--border); color: var(--text-muted); }
+.banner-title { font-weight: 650; margin-bottom: 3px; }
+
+/*
+ * The honesty caveat. Every screen that could be screenshotted as a compliance
+ * claim carries one, and it is NOT visually suppressed: a caveat styled to be
+ * ignorable is a caveat that has been removed.
+ */
+.caveat {
+  margin-top: 16px; padding: 13px 16px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--text-faint);
+  border-radius: var(--radius);
+  font-size: 12px; line-height: 1.6; color: var(--text-muted);
+}
+.caveat strong { color: var(--text); }
+
+/* --- Buttons ------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 13px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text); font-size: 13px; font-weight: 550; cursor: pointer;
+  font-family: inherit;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: #1740b8; }
+/* Destructive actions look destructive. Nobody should reach for one by
+   accident, and the tamper demo genuinely damages data. */
+.btn-danger { background: var(--block-bg); border-color: #f3bdb8; color: var(--block); }
+.btn-danger:hover { background: #fbdedb; }
+
+/* --- Empty and error states --------------------------------------------- */
+
+/*
+ * An empty state must say WHY it is empty and what to do. "No data" is a
+ * failure of the interface, not a description of the world.
+ */
+.empty { padding: 40px 20px; text-align: center; color: var(--text-muted); }
+.empty-title { font-weight: 600; color: var(--text); margin-bottom: 5px; }
+.empty-hint { font-size: 12px; max-width: 46ch; margin: 0 auto; }
+.empty-hint code {
+  font-family: var(--mono); background: var(--surface-2);
+  padding: 1px 5px; border-radius: 4px;
+}
+
+/* --- Rule breakdown ----------------------------------------------------- */
+
+.rules { display: grid; gap: 1px; background: var(--border); border-radius: var(--radius); overflow: hidden; }
+.rule { background: var(--surface); padding: 11px 14px; display: grid; gap: 3px; }
+.rule-head { display: flex; align-items: center; gap: 9px; }
+.rule-seq { font-family: var(--mono); font-size: 11px; color: var(--text-faint); width: 20px; }
+.rule-code { font-size: 12px; font-weight: 650; letter-spacing: 0.01em; }
+.rule-reason { font-size: 12px; color: var(--text-muted); padding-left: 29px; }
+.rule-detail {
+  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  padding-left: 29px;
+}
+/* A blocking rule gets a left edge. The eye finds it without reading. */
+.rule-blocked { border-left: 3px solid var(--block); }
+.rule-flagged { border-left: 3px solid var(--flag); }
+
+/* --- Chain view --------------------------------------------------------- */
+
+.chain-hash { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.control-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; }
+.control-title { font-weight: 600; font-size: 13px; }
+.control-desc { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+.control-gap {
+  font-size: 12px; color: var(--block); margin-top: 5px;
+  background: var(--block-bg); padding: 7px 10px; border-radius: var(--radius-sm);
+}
+.control-limit {
+  font-size: 12px; color: var(--flag); margin-top: 5px;
+  background: var(--flag-bg); padding: 7px 10px; border-radius: var(--radius-sm);
+}
+
+.stack { display: grid; gap: 16px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+
+@media (max-width: 900px) {
+  .shell { flex-direction: column; }
+  .sidebar { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border); }
+  .main { padding: 20px 16px 48px; }
+}

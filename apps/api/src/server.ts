@@ -21,6 +21,7 @@ import { auditRoutes } from './routes/audit.js';
 import { paymentRoutes } from './routes/payments.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { reportRoutes } from './routes/reports.js';
+import { consoleRoutes } from './routes/console.js';
 import { selectPaymentProvider, type PaymentProvider } from './providers/payment.js';
 import { RazorpayIfscProvider, type BankLookupProvider } from './providers/bank-lookup.js';
 import { MockRiskProvider, type RiskProvider } from './providers/risk.js';
@@ -179,6 +180,7 @@ export function buildServer({
   );
   app.register(webhookRoutes({ pool, config }));
   app.register(reportRoutes({ pool, config, now }));
+  app.register(consoleRoutes({ pool, config }));
 
   /* --- 404 -------------------------------------------------------------- */
   app.setNotFoundHandler((request, reply) => {

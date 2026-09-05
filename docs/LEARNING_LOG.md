@@ -358,3 +358,58 @@ Do not go broader than this list yet. Phase 2 will supply the next one.
 - The MCP specification, `tools/list` and `tools/call`.
 - OWASP "Top 10 for LLM Applications", LLM01 (prompt injection) and LLM08
   (excessive agency) — the second is the one this phase is really about.
+
+---
+
+## Phase 8 — Dashboard and reports
+
+**Concepts**
+
+1. **A framework is not a certification.** FREE-AI is a committee report with no
+   certifying authority — so a compliance percentage is not merely wrong, it is
+   unmeasurable.
+2. **A ratio and a percentage are different rhetorical objects.** "20/26"
+   invites "which six?"; "77%" invites nothing.
+3. **Composition of honest parts is not automatically honest.** Every control
+   was truthful; the selection was not.
+4. **Self-verifying reports**: a control that carries its own query cannot drift
+   from the code.
+5. **A failing query is not an empty one**, and neither is a pass.
+6. **Data minimisation is architectural.** The strongest privacy control here is
+   that the schema has nowhere to put a full phone number.
+7. **Information hierarchy**: a compliance console exists to make the exception
+   findable, so gaps render above successes and colour carries meaning only.
+8. **Empty states are a correctness problem** — "nothing happened" and "the API
+   is down" demand opposite responses.
+9. **Server Components keep secrets on the server**, and a missing
+   `NEXT_PUBLIC_` prefix turns that discipline into a build-time guarantee.
+10. **Tabular numerals** — why digits must line up in a table of amounts.
+11. **Indian digit grouping** (12,34,567) is not the same algorithm as
+    thousands separators.
+
+**Skills practised**
+
+- Designing a measurement that can come out badly.
+- Writing negative tests: scanning a response for `%` and "compliant" so the
+  test fails when somebody "improves" the wording.
+- Building a restrained design system where colour is semantic rather than
+  decorative.
+- Reading `EXPLAIN (ANALYZE, BUFFERS)` for plan shape rather than for timing.
+
+**Mistakes and what they taught**
+
+- The 20/20 coverage report. → *A number that cannot move is not a
+  measurement.*
+- A test that asserted an invariant instead of exercising a branch. → *If I
+  cannot name what would have to break for this test to fail, it is not a test.*
+  Fifth phase with this lesson.
+- I invented `next@15.6.1` and two other versions that do not exist. → *`npm
+  view` takes two seconds. Look it up; do not remember it.*
+
+**What to study next**
+
+- The RBI FREE-AI committee report itself — the seven sutras and six pillars, in
+  the original.
+- Next.js App Router: Server Components, `cache: 'no-store'`, Server Actions.
+- Edward Tufte on data-ink ratio; Matthew Ström on colour in interfaces.
+- `EXPLAIN` output: "Using EXPLAIN" in the PostgreSQL manual.

@@ -51,3 +51,6 @@ Thumbs.db
 # never committed. Regenerate with `npm run seed -- --rotate-keys`.
 # ---------------------------------------------------------------------------
 .seed-keys.json
+
+# Dashboard local config (contains the admin key)
+apps/dashboard/.env.local

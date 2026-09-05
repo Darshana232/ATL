@@ -1,7 +1,8 @@
 # Phase 8 — Dashboard and Reports
 
-**Status:** IN PROGRESS · **Started:** 2026-09-05
-**Result:** _(sections 10–12 stay empty until the phase is finished)_
+**Status:** DONE · **Started:** 2026-09-05 · **Finished:** 2026-09-05
+**Result:** three reports, eleven dashboard screens, 632 tests. Coverage came
+back 20/26 — after the first version returned a meaningless 20/20.
 
 > Sections 1–9 before any code. Sections 10–12 after.
 
@@ -179,12 +180,101 @@ Phase 2 for exactly this report.
 
 ## 10. What I learned
 
-_(after the phase)_
+**A perfect score is a design smell.** My first control set returned **20/20
+with zero gaps**, and I nearly shipped it. The number was worthless — not
+because it was wrong, but because it was *guaranteed before a single query ran*.
+I had listed only the controls I had already built. That is the same species of
+claim as "98.75% compliant", just with better manners: a measurement over a
+self-selected set of successes.
+
+The fix was to put the **missing** controls in scope. Coverage is now 20/26, and
+six named gaps sit above the covered ones on the screen — including "NO MERCHANT
+INTERVIEWS HAVE TAKEN PLACE". A number that *can* move is the only kind worth
+printing.
+
+**A ratio and a percentage are different rhetorical objects.** "20/26" invites
+"which six?" — exactly the question a compliance officer should ask. "77%"
+invites nothing, and implies a denominator somebody else agreed to. There is no
+such denominator here.
+
+**Controls should carry their own verification query.** This turned out to be
+the single best structural decision in the phase. If a Phase 9 refactor removes
+a control, its query stops returning rows and coverage drops **by itself**.
+Nobody has to remember to update the report — and "remember to update the
+report" is a control that fails silently and immediately.
+
+**A failing query is not an empty one.** A control whose evidence query *errors*
+is more alarming than one returning zero: it means the thing we thought we were
+measuring no longer exists in the shape we assumed. It reports `error`, and it
+is not counted.
+
+**Empty states are a correctness problem, not a polish problem.** On this
+console, an empty audit view could mean "nothing happened" or "the API is
+unreachable" — opposite situations demanding opposite responses. So every empty
+state says *why* it is empty and what to do.
+
+**Where the caveat lives determines whether it exists.** A caveat in the README
+gets separated from the number the first time somebody screenshots a screen. So
+the honesty text is a **required field in every report response** and is rendered
+unsuppressed on the page, and the standing disclaimer lives in the sidebar —
+visible in every screenshot of every screen.
+
+**Colour should carry meaning and nothing else.** The palette spends its whole
+contrast budget on what broke, what is flagged and what is unproven. A sensitive
+tool in the agent registry renders red, so a healthy deployment has *no red at
+all* on that screen and the exception is findable without reading a label.
 
 ## 11. Mistakes made & why
 
-_(after the phase)_
+**1. The 20/20 report.** Covered above, and it is the mistake of the phase. What
+makes it interesting is that every individual control was honest — the evidence
+was real, the queries were real, the limitations were stated. **The dishonesty
+was in the selection, which no individual check could catch.** Composition of
+honest parts is not automatically honest.
+
+**2. A test that asserted an invariant instead of exercising a branch.** My
+first "a failing query is a gap" test called `buildCoverageReport` and then
+checked that no control was `covered` with zero evidence — a property that holds
+whether or not the error path works at all. Replaced by exporting
+`evaluateControl` and handing it a genuinely broken query. Fifth phase with a
+version of this lesson, and I now recognise the shape on sight: *if I cannot
+name what would have to break for this test to fail, it is not a test.*
+
+**3. I pinned dependency versions I had invented.** `next@15.6.1`,
+`react@19.2.0`, `@types/react@19.2.2` — none existed. `npm view` takes two
+seconds and I did not spend them. Same family as inventing tool names in Phase
+7 instead of reading the `tools` table: **look it up, do not remember it.**
+
+**4. `console` almost became `dashboard`.** I nearly named the API's read
+endpoints after their consumer. They are the *operator reads*; the dashboard is
+one client. Naming an interface after its first caller is how a second caller
+ends up with a confusing dependency.
 
 ## 12. Open questions / debt
 
-_(after the phase)_
+- **The console endpoints are admin-key guarded, which is not RBAC.** One shared
+  secret, no rotation, no per-user identity — so "who looked at this?" is
+  unanswerable. It is listed as gap **ATL-C22** in the coverage report rather
+  than quietly omitted, and it is Phase 9 work.
+- **Reading the audit trail is not itself audited.** `CLAUDE.md` §12 lists "data
+  access" as an event worth capturing, and we capture report *generation* but
+  not report *viewing*. That is a real gap for a system whose product is
+  evidence.
+- **No charts.** Every screen is tables and metrics. Defensible for an MVP —
+  tables are precise and charts are approximate — but a decision-volume trend
+  over time would genuinely help an operator, and its absence is a choice rather
+  than a conclusion.
+- **Coverage recomputes on every page load.** Twenty-six aggregates per request.
+  Fine at this size; a nightly materialised snapshot is what a monthly
+  compliance report actually wants anyway — a figure that does not change while
+  you are reading it.
+- **The STR review workflow has no UI.** The API supports
+  DRAFT → UNDER_REVIEW → READY_FOR_FILING with an audit event at each step, but
+  the screen is read-only. A reviewer currently needs curl.
+- **No accessibility audit.** Semantic HTML, real tables and sufficient contrast
+  by construction, but nothing has been tested with a screen reader and there is
+  no keyboard-navigation pass.
+- **`formatPaise` exists twice** — once in the API (`money.ts`) and once in the
+  dashboard. Deliberate, because the dashboard must not import server code, but
+  two implementations of Indian digit grouping will eventually disagree. A tiny
+  shared package would fix it.

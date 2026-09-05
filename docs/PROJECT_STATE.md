@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-05 · **Current phase:** 7 complete, 8 in progress
+**Last updated:** 2026-09-05 · **Current phase:** 8 complete, 9 in progress
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -29,7 +29,7 @@ product. Consolidated from thirteen on 2026-09-05 — see **ADR-0014**. Phases
 | 5 | Authorization endpoint: agent auth, idempotency, replay, voucher | ✅ complete |
 | 6 | Hash-chained audit trail + `/verify` + tamper demo | ✅ complete |
 | 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ✅ complete |
-| 8 | Dashboard **and** reports (FREE-AI coverage, STR draft, DPDP register) | ⬜ |
+| 8 | Dashboard **and** reports (FREE-AI coverage, STR draft, DPDP register) | ✅ complete |
 | 9 | Hardening: threat model, RBAC, rate limits, ESLint, CI, observability, deploy, demo | ⬜ |
 
 A plain-English companion to this roadmap — one file per phase, plus 67 concept
@@ -210,28 +210,65 @@ blocks the payment — discovered by removing them one at a time.
 
 ---
 
-## Next work unit — Phase 8: dashboard and reports
+## Added in Phase 8
 
-Write the before-half of `Understanding/PHASE_08_dashboard_and_reports.md` first.
+```
+apps/api/src/
+  reports/controls.ts      26 controls in scope, each with its OWN query
+  reports/free-ai.ts       coverage: 20/26, a ratio, never a percentage
+  reports/str.ts           deterministic candidates; DRAFT only, never filed
+  reports/dpdp.ts          register declared in code, counted from the database
+  repositories/report.ts   stored reports, immutable bodies, review lifecycle
+  routes/reports.ts        GET the three reports; generate; review
+  routes/console.ts        operator reads for the dashboard
+  db/migrations/0010_reports.sql
 
-The reports *are* screens in the dashboard, which is why ADR-0014 merged them.
+apps/dashboard/            Next.js 16, eleven screens (ADR-0002)
+  src/lib/api.ts           the ONLY place the console talks to the API
+  src/app/globals.css      design system: colour carries meaning, nothing else
+  src/app/…                overview, decisions (+detail), payments, risk,
+                           mandates, agents, audit, three reports
+docs/PERFORMANCE.md        EXPLAIN ANALYZE, owed since Phase 2
+```
 
-1. **Next.js dashboard** (`apps/dashboard`, ADR-0002): overview, transactions,
-   agents, mandates, decisions, audit trail with the integrity banner and the
-   tamper demo, risk signals, reports, settings.
-2. **FREE-AI control coverage** — `Control Coverage: n/20` with per-control
-   evidence and named gaps. **Never** a compliance percentage
-   (RESEARCH_REALITY_CHECK item 4).
-3. **STR draft** — detection → candidate → DRAFT → human review → "ready for
-   filing". Never "filed": FIU-IND filing runs through FINnet by registered
-   reporting entities and we are not one (item 6).
-4. **DPDP processing register** — data category, purpose, source, retention,
-   masking, legal basis, with gaps named. **Privacy Control Coverage**, never
-   "DPDP compliant".
-5. Every simulated component labelled in the UI, not only in the docs.
+**Verified working:** 632 tests green, `tsc --noEmit` clean in both workspaces,
+`next build` clean, and all eleven routes served 200 against the live API. The
+rendered HTML was checked for the constraints that matter: no percentage and no
+"compliant" on the coverage screen, "DRAFT — HUMAN REVIEW REQUIRED" and "cannot
+and will not file" on the STR screen, and SIMULATED badges on the overview.
 
-Owed from earlier phases: `EXPLAIN ANALYZE` on `loadForAuthorization` and the
-spend query, with real row counts.
+**The finding of the phase:** the first coverage report returned **20/20 with
+zero gaps**. Every individual control was honest; the dishonesty was in the
+*selection*. The in-scope set now includes six controls we have not built —
+including "NO MERCHANT INTERVIEWS HAVE TAKEN PLACE" — so the number can move.
+See ADR-0022.
+
+**Performance debt paid.** All three hot queries are index scans, sub-millisecond,
+with plan shapes recorded in `docs/PERFORMANCE.md` — including one finding: the
+audit-chain page currently prefers the primary key over the composite chain
+index and filters 171 rows, which is correct at this size and will stop being
+correct with per-merchant chains.
+
+---
+
+## Next work unit — Phase 9: hardening and shipping
+
+Write the before-half of `Understanding/PHASE_09_hardening.md` first.
+
+One "make it shippable" pass (ADR-0014):
+
+1. **Threat model** — `docs/THREAT_MODEL.md`, STRIDE over the three trust zones,
+   with each mitigation pointing at the test that proves it.
+2. **RBAC and user sessions** — closes gap ATL-C22. Replaces the shared admin
+   key; makes `createdBy` a verified identity rather than a claim. Also closes
+   the open mandate READ endpoints inherited from Phase 3.
+3. **Rate limiting** — closes gap ATL-C23.
+4. **ESLint + Prettier**, and CI running typecheck, lint and the full suite.
+5. **Observability** — request/agent/mandate/decision ids already flow through
+   the logs; add timing and a trace view.
+6. **Deployment** — the committed `docker-compose.yml` has never been run
+   (ADR-0004). Either exercise it or say so in the README.
+7. **Demo polish** — one script that tells the whole story end to end.
 
 ## Documentation structure — SETTLED
 

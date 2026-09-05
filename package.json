@@ -21,6 +21,12 @@
     "db:start": "brew services start postgresql@16",
     "db:stop": "brew services stop postgresql@16",
     "db:psql": "psql atl_india_dev",
-    "seed": "npm run seed -w apps/api"
+    "seed": "npm run seed -w apps/api",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:dashboard": "npm run dev -w apps/dashboard",
+    "demo:authorize": "npm run demo:authorize -w apps/api",
+    "demo:tamper": "npm run demo:tamper -w apps/api",
+    "demo:agent": "npm run demo:agent -w apps/api",
+    "mcp": "npm run mcp -w apps/api"
   }
 }
