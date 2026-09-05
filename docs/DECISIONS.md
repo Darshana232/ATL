@@ -511,3 +511,112 @@ for `atl_app`. To edit a past event, an attacker must first
 `ALTER TABLE … DISABLE TRIGGER`, which requires ownership and which PostgreSQL
 logs. The barrier is higher than the original design claimed, and the demo now
 shows both refusals before the tamper succeeds.
+
+---
+
+## ADR-0019 — Prompt injection is designed around, not defended against
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** We do **not** attempt to detect or sanitise prompt injection as a
+security control. The agent's **authority** is bounded, not its obedience.
+
+**Context.** The agent reads text it did not write — product names,
+descriptions, merchant names. Any of it can contain instructions. There is no
+known reliable way to make a language model ignore them.
+
+**Reasoning.** A sanitiser that works most of the time creates false
+confidence, which is worse than none: everybody stops worrying about the case
+it misses. So the assumption is that **the agent is fully compromised**, and
+the design question becomes "what can a compromised agent actually do?" The
+answer is: propose. It cannot import the policy engine, cannot reach a payment
+provider, cannot mint a voucher, and cannot write an audit event. It can make
+signed HTTP calls to the trusted zone, and the trusted zone says no.
+
+**What we do anyway, labelled as mitigation rather than defence.** Untrusted
+catalog text is length-bounded by a database `CHECK` and fenced in
+`<merchant-supplied-text>` tags so the model is told plainly what is data. The
+system prompt describes the model's real position. None of this is relied upon.
+
+**Detection is for the report, never for the defence.** `runAgent` records
+`injectionObserved` so a human can see hostile text passed through. It never
+changes behaviour on that basis.
+
+**How it is proven.** `agent/injection.test.ts` runs a deliberately credulous
+mock model against a hostile product description that lives in the **seeded
+catalog**, not in the test file. The agent obeys the injection, skips
+authorization, and attempts a ₹9,999 payment at a liquor merchant. No money
+moves. A test where the model *refuses* would prove Anthropic's safety training
+works, not that our architecture does.
+
+**Alternatives considered.** Input sanitisation as a control (rejected: see
+above); an LLM-based injection classifier (rejected: a probabilistic gate in
+front of a deterministic one, and ADR-0010's reasoning applies —
+authorization must stay explainable); refusing to let agents read merchant text
+at all (rejected: it is the product).
+
+---
+
+## ADR-0020 — One tool registry, two transports
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** `agent/tools.ts` holds the only tool definitions and the only
+authorization function. The in-process runtime and the MCP server (`mcp/server.ts`)
+both call it. Neither reimplements the scope check.
+
+**Reasoning.** A second implementation of "which tools may this agent call?" is
+how a security boundary develops a hole: the two copies drift, and the one
+nobody reviewed is the one that is wrong. Adding MCP should add a *transport*,
+not a second policy.
+
+**Two-sided enforcement, and only one side is a control.** An ungranted tool is
+never offered (hygiene — a smaller prompt is a smaller attack surface) *and* is
+refused when called (the control — a model can invent a tool name it was never
+shown, and an injected one will). Shipping only the first would be hiding a
+capability rather than removing it.
+
+**Grants are read on every run and every tool listing, never cached.** A revoked
+grant must take effect immediately; a cache would let a compromised agent keep a
+capability we already removed, for as long as the TTL.
+
+**Also recorded.** Three sensitive tools — `modify_mandate`,
+`delete_audit_event`, `export_all_users` — are defined and granted to **nobody**.
+A tool-level authorization demo with nothing dangerous in the catalogue proves
+nothing. And `execute_payment` *is* granted, because it is not dangerous to
+grant: it cannot move money without a voucher. Granting it makes the agent
+useful; the voucher makes it safe, and those are different questions.
+
+---
+
+## ADR-0021 — Razorpay test mode is a real integration; the mandate rail is not
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** `RazorpayTestProvider` calls the genuine `api.razorpay.com/v1`
+test-mode API. `MockUpiProvider` remains the default and is labelled SIMULATED
+on every row it writes.
+
+**What is real and what is not, stated precisely.** Razorpay test mode gives
+real API calls, real orders and real test payments, with no real money and no
+full KYC — a genuine integration. The **agentic mandate rail** is not: Razorpay's
+agentic-payments product is a live pilot with no public developer API
+(RESEARCH_REALITY_CHECK item 1), so mandate authorization is our own design and
+is simulated regardless of which provider executes the payment.
+
+**A live key is refused at construction.** `rzp_live_…` throws. Moving real
+money during a demonstration is the worst mistake this project could make, and
+a check that runs before anything else is cheap insurance.
+
+**Fail closed on a timeout.** A provider that does not answer within the budget
+yields `failed`, never `captured`. On a payment path, *"we do not know"* must
+never be recorded as *"money moved"*: a payment wrongly marked captured costs a
+human hours of reconciliation; one wrongly marked failed costs a retry.
+
+**Authorize and capture are separate because the rail makes them separate.**
+Razorpay's order is the merchant-side half; a payment id only exists once a
+customer pays, which an autonomous agent cannot do. So the payment stays
+`authorized` and the **webhook** completes it — which is how it works in
+production anyway.
+
+**Honest gap.** No test-mode keys exist yet, so the Razorpay paths have never
+run against the real API. The provider is written against the documented
+contract and exercised with the mock. Until keys exist, nothing may claim we
+have called Razorpay successfully.

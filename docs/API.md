@@ -417,3 +417,105 @@ Writes five real events, verifies, anchors them, shows the application role
 *and* the database owner both being refused, then disables the append-only
 trigger as a privileged insider would, edits one event's **actor**, and shows
 verification failing and naming the row.
+
+---
+
+## `POST /v1/payments` — redeem a voucher
+
+Signed like every agent endpoint (see `/v1/authorize`). **There is no path
+through this endpoint to a payment provider without a valid, unexpired, unspent
+voucher.**
+
+```json
+{ "voucher": "atlv1.eyJqdGki….signature", "amountPaise": 124000, "merchantId": "mer_bigbasket" }
+```
+
+`amountPaise` and `merchantId` are **cross-checked against the voucher's
+claims**. They are not redundant: the voucher says what was *approved*, these
+say what is being *attempted*, and requiring them to match is what makes the
+token a capability for one payment rather than a bearer credential for any.
+
+The order of checks is the security model: verify the MAC → check expiry →
+match the claims to this request → cross-check the stored decision → **claim
+the voucher by INSERT** (`payments.voucher_jti UNIQUE`) → only then call the
+provider.
+
+| Status | Meaning |
+|---|---|
+| 201 | Captured. Body carries `paymentId`, `providerPaymentId`, `simulated`. |
+| 202 | Authorized, awaiting the provider's webhook to capture. |
+| 200 | The provider declined. `status: "failed"` with a `failureReason`. |
+| 400 | Malformed body. |
+| 401 | `invalid_voucher` — missing, forged, expired or unreadable. One message for all four. |
+| 409 | `voucher_mismatch` (wrong amount, merchant or agent) or `voucher_already_used`. |
+| 503 | `payments_unavailable` — no signing secret configured. Fails closed. |
+
+**A failed payment still consumes its voucher.** Otherwise a decline could be
+retried indefinitely against one authorization, and each retry is a real
+attempt on a real rail.
+
+`GET /v1/payments/:id` returns the payment for reconciliation. A GET has no
+body, so the body-hash line of the signing string is the hash of the empty
+string, and the signed path is the route pattern `/v1/payments/:id`.
+
+## `POST /v1/webhooks/razorpay` — provider callbacks
+
+Authenticated by **HMAC-SHA256 over the raw body** (`x-razorpay-signature`).
+This is the whole of the authentication: without it, anyone who knows the URL
+can mark any payment captured.
+
+Idempotent on `x-razorpay-event-id`, falling back to a hash of the body when the
+header is absent (weaker, and recorded as `event_id_source: "body_hash"`).
+Delivery is **at-least-once**, so a redelivery returns `200 { duplicate: true }`
+rather than an error — an error would make the provider retry forever.
+
+| Outcome | Meaning |
+|---|---|
+| `captured` / `failed` | The payment was moved to that state. |
+| `duplicate` | Already in that state. |
+| `unmatched` | No local payment matches the order. |
+| `ignored` | An event type we do not handle. |
+| `rejected` | Signature did not verify (`401`). Recorded as evidence. |
+
+An **amount mismatch** between the provider and our authorized amount is
+recorded as `failed`, never captured: it is a reconciliation incident requiring
+a human.
+
+## Agent tools
+
+The agent runtime and the MCP server share one registry
+(`apps/api/src/agent/tools.ts`) and one authorization function.
+
+| Tool | Granted to the shopping agent |
+|---|---|
+| `search_products`, `get_product`, `create_cart` | yes |
+| `get_mandate`, `get_transaction` | yes |
+| `request_authorization`, `execute_payment` | yes |
+| `modify_mandate`, `delete_audit_event`, `export_all_users`, `generate_compliance_report` | **no — granted to nobody** |
+
+Ungranted tools are **not offered** *and* **refused if called**. Only the second
+is a security control: a model can invent a tool name it was never shown.
+
+`execute_payment` is safe to grant because it cannot move money without a
+voucher. Granting it makes the agent useful; the voucher makes it safe.
+
+### MCP
+
+```
+npm run mcp -w apps/api          # stdio MCP server
+ATL_MCP_AGENT_ID=agt_grocery_shopper ATL_MCP_MANDATE_ID=mnd_weekly_groceries
+```
+
+The agent identity comes from the environment, never from a tool parameter — a
+client that could choose its own agent id would be choosing its own
+permissions.
+
+### Try it
+
+```
+npm run demo:agent -w apps/api
+```
+
+Four runs: a compliant purchase, an over-limit purchase, a **prompt injection
+hidden in a real seeded product listing** that the agent obeys completely and
+still cannot act on, and an injection aimed at tools it was never granted.

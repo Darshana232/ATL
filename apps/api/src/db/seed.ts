@@ -116,6 +116,11 @@ const TOOLS = [
   ['create_cart', 'Assemble a cart of catalogue items', false],
   ['get_mandate', 'Read the limits of the mandate the agent is acting under', false],
   ['request_authorization', 'Ask the policy engine to authorize a payment', false],
+  // Added in Phase 7. Note that this tool is NOT dangerous to grant: it cannot
+  // move money without a voucher, and only the policy engine mints vouchers.
+  // Granting it is what makes the agent useful; the voucher is what makes it
+  // safe. Those are two different questions and it is worth keeping them apart.
+  ['execute_payment', 'Execute a payment that has already been authorized', false],
   ['get_transaction', 'Read the outcome of a payment the agent initiated', false],
   // SENSITIVE. Defined so the system knows they exist and can display an
   // unusual grant - and granted to NOBODY below. That is the point: a shopping
@@ -132,6 +137,7 @@ const SHOPPING_TOOLS = [
   'search_products',
   'get_product',
   'create_cart',
+  'execute_payment',
   'get_mandate',
   'request_authorization',
   'get_transaction',

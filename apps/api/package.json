@@ -12,7 +12,9 @@
     "migrate": "tsx src/db/migrate.ts",
     "seed": "tsx src/db/seed.ts",
     "demo:authorize": "tsx src/demo/authorize-demo.ts",
-    "demo:tamper": "tsx src/demo/tamper-demo.ts"
+    "demo:tamper": "tsx src/demo/tamper-demo.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "demo:agent": "tsx src/demo/agent-demo.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.124.0",

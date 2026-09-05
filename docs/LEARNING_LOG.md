@@ -300,3 +300,61 @@ Do not go broader than this list yet. Phase 2 will supply the next one.
 - PostgreSQL docs: triggers, `ALTER TABLE … DISABLE TRIGGER`, and what the
   `session_replication_role` setting can bypass.
 - "Keyset pagination" (Markus Winand, use-the-index-luke.com).
+
+---
+
+## Phase 7 — Payments and the agent runtime
+
+**Concepts**
+
+1. **Authorize vs capture**, and why a rail that separates them forces the
+   webhook design rather than merely permitting it.
+2. **Webhooks are at-least-once.** Retries on any non-2xx *and* on timeouts,
+   including timeouts after success. Idempotency is not optional.
+3. **Signing over raw bytes**, again — this time for an inbound request.
+4. **Fail closed on a payment path.** "We do not know" must never be recorded as
+   "money moved".
+5. **Capability tokens beat bearer tokens** when you re-match the claims to the
+   attempt.
+6. **Prompt injection is designed around, not defended against.** Bound the
+   authority, not the obedience.
+7. **Tool-level authorization is two-sided**, and only one side is a control.
+8. **One registry, two transports.** Adding MCP must add a transport, not a
+   second policy.
+9. **Granting a tool and granting authority are different questions.**
+   `execute_payment` is safe to grant because the voucher is what makes it safe.
+10. **A reference table with a foreign key** catches a typo in a capability name
+    at insert time instead of silently granting nothing.
+
+**Skills practised**
+
+- Running controls that *break* the architecture and confirming the tests
+  notice — including one that revealed a test passing for the wrong reason.
+- Removing security layers one at a time to find out how many there actually
+  are. There were four where I would have said one.
+- Writing a deliberately gullible mock model, because a well-behaved one would
+  have tested the wrong thing.
+- Reading a fixture out of the seeded database instead of inventing it in the
+  test file.
+
+**Mistakes and what they taught**
+
+- The forged voucher was 19 characters and died at a schema length check, so
+  the MAC was never exercised. → *Green is not evidence; green plus a failing
+  control is evidence.* Fourth phase with a version of this lesson.
+- I invented tool names instead of reading the `tools` table. → *The foreign key
+  is the authority.*
+- The JSON parser ran before authentication. → *Authenticate first, interpret
+  second — and check that the framework agrees with you.*
+- A signed GET was impossible because the guard required a body. → *A signature
+  scheme with two shapes has an ambiguity.*
+
+**What to study next**
+
+- Razorpay's Orders/Payments API docs and their webhook payload reference — as
+  a worked example of a real authorize/capture split.
+- Simon Willison's writing on prompt injection, particularly why detection is
+  not a solution.
+- The MCP specification, `tools/list` and `tools/call`.
+- OWASP "Top 10 for LLM Applications", LLM01 (prompt injection) and LLM08
+  (excessive agency) — the second is the one this phase is really about.

@@ -1,7 +1,8 @@
 # Phase 7 — Payments and the Agent Runtime
 
-**Status:** IN PROGRESS · **Started:** 2026-09-05
-**Result:** _(sections 10–12 stay empty until the phase is finished)_
+**Status:** DONE · **Started:** 2026-09-05 · **Finished:** 2026-09-05
+**Result:** payment adapters, webhooks, a real agent runtime, an MCP server,
+and the injection test the project exists to pass. 580 tests.
 
 > Sections 1–9 before any code. Sections 10–12 after.
 
@@ -238,12 +239,121 @@ scales separately and its failures degrade nothing inside.
 
 ## 10. What I learned
 
-_(after the phase)_
+**Prompt injection is not defended against. It is designed around.** I started
+this phase expecting to write a sanitiser. There is no reliable way to strip
+instructions from natural language, and building one would create false
+confidence — the worst possible outcome, because it would make everyone stop
+worrying. What we do instead is bound the agent's *authority*, not its
+obedience. The injected agent in the demo does exactly what the attacker says.
+It is not persuaded otherwise, and nothing tries to persuade it. It just cannot
+reach anything that matters.
+
+The fenced `<merchant-supplied-text>` tags are a mitigation and are labelled as
+one. The architecture is the defence.
+
+**Defence in depth is only real when you try to remove a layer.** I ran the
+forged-voucher path as a control and found **four independent gates**: the
+request schema (length and shape), the MAC, the claims-match-the-request check,
+and the "decision must exist and be a PASS" cross-check. Disabling any *one* of
+them still left the agent unable to pay. I only learned that by breaking them
+one at a time. Reading the code, I would have said there was one gate.
+
+**Authorize and capture are two steps for a reason I had not understood.**
+Razorpay's test API creates an *order* — the merchant-side half. The payment id
+only exists once a customer actually pays, which an autonomous agent cannot do.
+So the honest implementation leaves the payment `authorized` and waits for the
+webhook. Capturing immediately would have been recording money as moved on the
+strength of nothing.
+
+**Webhooks are at-least-once, and that is a contract, not a bug.** A provider
+retries on any non-2xx *and* on timeouts — including a timeout that happened
+after we already succeeded. So the handler must be idempotent, and returning
+500 for an event we simply do not handle would make the provider retry it
+forever. Every path that has the event durably recorded answers 200.
+
+**One registry, two transports.** The MCP server adds a transport and nothing
+else — same `TOOL_DEFINITIONS`, same `authorizeToolCall`, same `executeTool`.
+Writing a second scope check for MCP would have been the natural thing to do
+and would have been the bug: two copies drift, and the one nobody reviews is
+the one that is wrong.
+
+**Offering a tool and permitting a tool are different questions.** Not offering
+an ungranted tool keeps the prompt small; refusing it when called is the
+control. Shipping only the first would be hiding a capability rather than
+removing it, and a model that invents a tool name — which an injected one
+absolutely will — would walk straight past it.
+
+**`execute_payment` is safe to grant.** That surprised me. The tool cannot move
+money without a voucher, and only the policy engine mints vouchers. Granting it
+is what makes the agent useful; the voucher is what makes it safe. Keeping
+those two questions apart is what lets the tool list stay generous while the
+authority stays tight.
 
 ## 11. Mistakes made & why
 
-_(after the phase)_
+**1. The injection test passed for the wrong reason, and a control proved it.**
+My `MockAgentProvider` sent the forged voucher `"injected-no-voucher"` — 19
+characters. The request schema requires 20. So every injection test was green
+because of a **length check**, and the MAC was never reached.
+
+I found it by disabling voucher verification entirely and watching the
+injection tests stay green. A test suite that does not notice you removing the
+security control is not testing the security control. The mock now sends a
+correctly shaped `atlv1.` token with a full, plausible claims object, so it
+reaches the gate we actually care about.
+
+This is the fourth phase in a row with a version of this lesson, and the shape
+is now unmistakable: **green is not evidence; green plus a failing control is
+evidence.**
+
+**2. I invented tool names instead of reading the table.** My registry called it
+`delete_audit_log`; the seeded `tools` table says `delete_audit_event`, and
+`execute_payment` did not exist at all. The insert failed on
+`agent_tool_grants_tool_name_fkey` — which is exactly why that table is a
+reference table with a foreign key rather than a `TEXT[]` column on `agents`
+(migration 0002 argued this before there was any code to prove it). A typo in a
+capability name became an error at insert time instead of an agent silently
+losing a capability.
+
+**3. The JSON parser ran before authentication.** A malformed body with a
+*forged* signature returned 400 (a parser error) instead of 401 (rejected). The
+content-type parser was calling `done(error)` on a parse failure, which meant
+untrusted input reached a parser on an unauthenticated request — the exact
+ordering the raw-body design exists to avoid. The parser now never fails;
+routes produce the 400 *after* the signature check.
+
+**4. A signed GET was impossible.** The signature guard required a raw body, so
+`GET /v1/payments/:id` returned 401 for a perfectly valid signature. A GET now
+signs the hash of the empty string. The tempting fix — omitting the body-hash
+line for GET — would have given the scheme two shapes, and a signature scheme
+with two shapes is a signature scheme with an ambiguity.
+
+**5. The demo output was unreadable.** The injected agent retried the same
+refused call eight times. Realistic, and useless to look at. Capped at two —
+enough to show the refusal is not a one-off.
 
 ## 12. Open questions / debt
 
-_(after the phase)_
+- **The signed path for a GET is the route pattern, not the URL.** So
+  `/v1/payments/:id` is covered but *which* id is not. A signature for one
+  payment can be replayed to read another. It is a read of the agent's own
+  payments, so the impact is small, but it is a real gap: the fix is to include
+  the resolved path in the signing string.
+- **`get_mandate` is unauthenticated.** It calls the open mandate read endpoint
+  inherited from Phase 3. That endpoint needs to close in Phase 9, and this
+  tool needs to sign like the others.
+- **The Razorpay capture path is untested against the real API.** No test-mode
+  keys exist yet. The provider is written against the documented contract and
+  the code paths are exercised with the mock, but "we called the real API and
+  it worked" is not something we can currently claim, and the README must not
+  imply it.
+- **The agent loop has no cost or step budget beyond `MAX_TURNS = 8`.** A real
+  runtime needs a token budget, a wall-clock timeout, and a spend-per-run cap.
+- **The injection fixture is one payload.** A serious evaluation would need a
+  corpus — many phrasings, many placements (name, description, merchant name),
+  and a real model rather than a scripted one, measuring how often the
+  *proposal* is hostile. Our claim is only that a hostile proposal is refused.
+- **Carts are single-merchant.** Splitting across merchants needs several
+  authorizations, and silently paying only part of a cart would be worse than
+  refusing.
+- **`EXPLAIN ANALYZE` is still owed.** Now four phases old.

@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-05 · **Current phase:** 6 complete, 7 in progress
+**Last updated:** 2026-09-05 · **Current phase:** 7 complete, 8 in progress
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -28,7 +28,7 @@ product. Consolidated from thirteen on 2026-09-05 — see **ADR-0014**. Phases
 | 4 | Deterministic policy engine (12 rules; 13th added in Phase 5) | ✅ complete |
 | 5 | Authorization endpoint: agent auth, idempotency, replay, voucher | ✅ complete |
 | 6 | Hash-chained audit trail + `/verify` + tamper demo | ✅ complete |
-| 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ⬜ |
+| 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ✅ complete |
 | 8 | Dashboard **and** reports (FREE-AI coverage, STR draft, DPDP register) | ⬜ |
 | 9 | Hardening: threat model, RBAC, rate limits, ESLint, CI, observability, deploy, demo | ⬜ |
 
@@ -169,30 +169,66 @@ asserted `intact` immediately beforehand as a control.
 
 ---
 
-## Next work unit — Phase 7: payments and the agent runtime
+## Added in Phase 7
 
-Write the before-half of `Understanding/PHASE_07_payments_and_agent.md` first.
+```
+apps/api/src/
+  providers/payment.ts     PaymentProvider + MockUpi (SIMULATED, deterministic)
+                           + RazorpayTest (real test-mode API, refuses live keys)
+  providers/catalog.ts     catalog search, scoped to the mandate's merchants
+  repositories/payment.ts  insert (the single-use gate) + lifecycle transitions
+  repositories/webhook.ts  delivery recording, unique per provider event id
+  routes/payments.ts       POST /v1/payments, GET /v1/payments/:id
+  routes/webhooks.ts       POST /v1/webhooks/razorpay
+  webhooks/signature.ts    raw-body HMAC verification
+  agent/tools.ts           ONE registry, ONE scope check, two transports
+  agent/executor.ts        tool execution; payments go over signed HTTP
+  agent/provider.ts        AgentProvider + MockAgent (credulous, on purpose)
+                           + ClaudeAgentProvider (real Anthropic API)
+  agent/runtime.ts         the loop; summary generated from facts, not the model
+  agent/injection.test.ts  THE test
+  mcp/server.ts            stdio MCP server over the same registry
+  demo/agent-demo.ts       four runs, including the injection
+  db/migrations/0008_catalog.sql, 0009_webhooks.sql
+```
 
-Both halves are adapter work on the **outside** of the trust boundary — one
-adapting to a payment rail, one to a language model — and neither is a demo
-without the other (ADR-0014).
+**Verified working:** 580 tests green, `tsc --noEmit` clean, 9 migrations. The
+MCP server was driven over stdio and lists exactly the seven granted tools.
+The agent demo runs end to end on a real socket with real signatures.
 
-**Payments**
-1. `PaymentProvider` interface + `MockUpiProvider` (default, labelled
-   SIMULATED) + `RazorpayTestProvider` (real test-mode API, when keys exist).
-2. **The voucher becomes load-bearing:** capture is refused without a valid,
-   unexpired, single-use voucher. `payments.voucher_jti UNIQUE` is what makes
-   single use a database fact.
-3. Webhooks with signature verification, replay protection and idempotent
-   handling — a duplicate webhook must not double-capture.
+**Positive controls run:**
+- Letting the agent reach a payment provider directly (the ADR-0008 violation)
+  fails exactly the three tests that assert the boundary holds.
+- Disabling voucher verification revealed that the injection tests were passing
+  because the forged token was **too short for the request schema** — the MAC
+  was never reached. Fixed by making the forgery realistic. Documented in
+  PHASE_07 §11.
 
-**Agent runtime**
-4. Catalog provider (hand-seeded, Indian, with real MCCs — ADR-0013).
-5. Scoped tools: an agent receives only the tools `agent_tool_grants` permits.
-6. **The prompt-injection test.** A fully injected agent must still be unable to
-   move money — it can only ask, and asking goes through code it does not
-   control. This is the test that proves ADR-0008.
-7. MCP-compatible interface, if it earns its place.
+**Four independent gates** stop a forged voucher: request schema, MAC,
+claims-match-request, and decision-exists-and-passed. Removing any one still
+blocks the payment — discovered by removing them one at a time.
+
+---
+
+## Next work unit — Phase 8: dashboard and reports
+
+Write the before-half of `Understanding/PHASE_08_dashboard_and_reports.md` first.
+
+The reports *are* screens in the dashboard, which is why ADR-0014 merged them.
+
+1. **Next.js dashboard** (`apps/dashboard`, ADR-0002): overview, transactions,
+   agents, mandates, decisions, audit trail with the integrity banner and the
+   tamper demo, risk signals, reports, settings.
+2. **FREE-AI control coverage** — `Control Coverage: n/20` with per-control
+   evidence and named gaps. **Never** a compliance percentage
+   (RESEARCH_REALITY_CHECK item 4).
+3. **STR draft** — detection → candidate → DRAFT → human review → "ready for
+   filing". Never "filed": FIU-IND filing runs through FINnet by registered
+   reporting entities and we are not one (item 6).
+4. **DPDP processing register** — data category, purpose, source, retention,
+   masking, legal basis, with gaps named. **Privacy Control Coverage**, never
+   "DPDP compliant".
+5. Every simulated component labelled in the UI, not only in the docs.
 
 Owed from earlier phases: `EXPLAIN ANALYZE` on `loadForAuthorization` and the
 spend query, with real row counts.
