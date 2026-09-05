@@ -12,7 +12,7 @@ import type { Config } from '../config.js';
 import type { Pool } from '../db/pool.js';
 import { withTransaction } from '../db/transaction.js';
 import { appendAuditEvent } from '../audit/writer.js';
-import { requireAdminKey } from '../middleware/admin-auth.js';
+import { requireRole } from '../middleware/session-auth.js';
 import { buildCoverageReport } from '../reports/free-ai.js';
 import { buildStrDraft } from '../reports/str.js';
 import { buildDpdpRegister } from '../reports/dpdp.js';
@@ -42,7 +42,11 @@ const reviewBodySchema = z.strictObject({
 export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
   const { pool, config } = deps;
   const clock = deps.now ?? (() => new Date());
-  const adminOnly = { preHandler: requireAdminKey(config) };
+  // Reading a report is a viewer action. GENERATING one creates a stored,
+  // hashed compliance artefact, and REVIEWING one advances a workflow a human
+  // signs - both are compliance-role actions.
+  const canRead = { preHandler: requireRole({ pool, config, now: clock }, 'viewer') };
+  const canReview = { preHandler: requireRole({ pool, config, now: clock }, 'compliance') };
 
   return async function register(app) {
     /** Parse an optional reporting period from the query string. */
@@ -59,7 +63,7 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
       };
     };
 
-    app.get('/v1/reports/free-ai', adminOnly, async (request, reply) => {
+    app.get('/v1/reports/free-ai', canRead, async (request, reply) => {
       const period = periodOf(request.query);
       if (period === null) {
         return reply.code(400).send({ error: 'validation_failed', requestId: request.id });
@@ -68,7 +72,7 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
       return reply.code(200).send(await buildCoverageReport(pool, period));
     });
 
-    app.get('/v1/reports/str', adminOnly, async (request, reply) => {
+    app.get('/v1/reports/str', canRead, async (request, reply) => {
       const period = periodOf(request.query);
       if (period === null) {
         return reply.code(400).send({ error: 'validation_failed', requestId: request.id });
@@ -77,7 +81,7 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
       return reply.code(200).send(await buildStrDraft(pool, period));
     });
 
-    app.get('/v1/reports/dpdp', adminOnly, async (request, reply) => {
+    app.get('/v1/reports/dpdp', canRead, async (request, reply) => {
       const period = periodOf(request.query);
       if (period === null) {
         return reply.code(400).send({ error: 'validation_failed', requestId: request.id });
@@ -91,7 +95,7 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
      * ---------------------------------------------------------------- */
     app.post<{ Params: { kind: string }; Body?: { generatedBy?: string } }>(
       '/v1/reports/:kind/generate',
-      adminOnly,
+      canReview,
       async (request, reply) => {
         const kinds: Record<string, ReportKind> = {
           'free-ai': 'free_ai_coverage', str: 'str_draft', dpdp: 'dpdp_register',
@@ -115,7 +119,12 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
           : await buildDpdpRegister(pool, period);
 
         const id = newReportId();
-        const generatedBy = request.body?.generatedBy ?? 'admin';
+        // The VERIFIED identity, not a caller-supplied string. This is the
+        // whole point of ATL-C22: `generatedBy` used to record a claim.
+        const actor = request.principal!;
+        const generatedBy = actor.kind === 'operator'
+          ? actor.id
+          : (request.body?.generatedBy ?? 'shared_admin_key');
 
         const bodyHash = await withTransaction(pool, async (tx) => {
           const hash = await insertReport(tx, {
@@ -156,7 +165,7 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
 
     app.get<{ Querystring: { kind?: string; limit?: string } }>(
       '/v1/reports',
-      adminOnly,
+      canRead,
       async (request, reply) => {
         const kind = request.query.kind as ReportKind | undefined;
         const reports = await listReports(pool, {
@@ -181,7 +190,7 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
 
     app.get<{ Params: { id: string } }>(
       '/v1/reports/detail/:id',
-      adminOnly,
+      canRead,
       async (request, reply) => {
         const report = await findReport(pool, request.params.id);
 
@@ -204,7 +213,7 @@ export function reportRoutes(deps: ReportRoutesDeps): FastifyPluginAsync {
      * ---------------------------------------------------------------- */
     app.post<{ Params: { id: string } }>(
       '/v1/reports/detail/:id/review',
-      adminOnly,
+      canReview,
       async (request, reply) => {
         const parsed = reviewBodySchema.safeParse(request.body);
 

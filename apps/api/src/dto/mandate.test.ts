@@ -86,7 +86,12 @@ describe('money on the wire is integer paise', () => {
   });
 
   it('rejects an amount beyond exact representation', () => {
+    // The literal below LOSES PRECISION on purpose: 2^53+1 is not representable
+    // as a double, so it arrives as 9007199254740992. That is exactly the
+    // failure being tested - an amount JavaScript cannot hold exactly must be
+    // refused rather than silently rounded.
     expect(
+      // oxlint-disable-next-line no-loss-of-precision
       fieldsFor(termsSchema, { ...validTerms, windowLimitPaise: 9007199254740993 }),
     ).toContain('windowLimitPaise');
   });

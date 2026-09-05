@@ -413,3 +413,59 @@ Do not go broader than this list yet. Phase 2 will supply the next one.
 - Next.js App Router: Server Components, `cache: 'no-store'`, Server Actions.
 - Edward Tufte on data-ink ratio; Matthew Ström on colour in interfaces.
 - `EXPLAIN` output: "Using EXPLAIN" in the PostgreSQL manual.
+
+---
+
+## Phase 9 — Hardening and shipping
+
+**Concepts**
+
+1. **Authentication is not authorization.** Who you are, versus what you may
+   do. The shared admin key conflated them.
+2. **Four credential-storage decisions, one question — what does the verifier
+   need?** Slow hash (password), the key itself (HMAC), the public half
+   (signature), fast hash (bearer token).
+3. **Why a session token gets SHA-256 and a password gets scrypt.** The token
+   already has full entropy; there is nothing to brute-force.
+4. **Sessions vs JWTs**, and why "revoke now" decides it.
+5. **Cookie attributes as controls**: `HttpOnly` defeats XSS session theft,
+   `SameSite=Lax` is CSRF protection for every mutating endpoint at once.
+6. **User enumeration by timing**, and the dummy-hash fix.
+7. **Account lockout is a genuine trade** — it stops guessing and enables
+   targeted denial of access.
+8. **Authenticate before rate-limiting**, or the limiter becomes a DoS tool.
+9. **Fixed-window limiting** and its real burst shape — measured, not assumed.
+10. **STRIDE** as a way to enumerate threats systematically rather than by
+    imagination.
+11. **Ranked roles need an explicit rank**: alphabetically `admin` <
+    `compliance` < `viewer`, which is exactly backwards.
+
+**Skills practised**
+
+- Writing a threat model where every mitigation names the test that proves it.
+- Listing **accepted risks** in one place, plainly, instead of scattering
+  caveats.
+- Choosing lint rules against "would this have caught a real bug from this
+  project's history?" rather than by taste.
+- Injecting a security control's parameters so it cannot make a test suite
+  order-dependent.
+
+**Mistakes and what they taught**
+
+- `npm uninstall` pruned `vite` and the suite stopped booting. → *A green run
+  before a dependency change is not evidence about after it.*
+- I documented a burst shape I had not measured; the test disagreed. → *Do not
+  write comments about behaviour you have not run.*
+- The new rate limiter made my own tests order-dependent. → *A control that
+  changes behaviour needs its parameters injectable.*
+- I nearly closed ATL-C22 on the API while the console still used a shared key.
+  → *Closing a gap in the layer you happen to be editing is not closing the
+  gap.*
+
+**What to study next**
+
+- OWASP ASVS v4, sections 2 (authentication) and 3 (session management).
+- RFC 7914 (scrypt) and the Password Hashing Competition write-up on argon2id.
+- Adam Shostack, *Threat Modeling* — the STRIDE-per-element chapters.
+- The `SameSite` cookie spec, and why `Lax` rather than `Strict` is usually
+  right for a console.

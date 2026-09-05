@@ -34,6 +34,7 @@ import { loadEnvFile } from '../env-file.js';
 import { adminDatabaseUrl, loadConfig } from '../config.js';
 import { createLogger, type Logger } from '../logger.js';
 import { closePool, createPool, type Pool } from './pool.js';
+import { hashPassword } from '../auth/password.js';
 
 /* ------------------------------------------------------------------------ */
 /* Merchants                                                                */
@@ -454,6 +455,28 @@ const PRODUCTS: readonly [string, string, string, string, number, string, string
 export const INJECTION_FIXTURE_SKU = 'bb-atta-5kg-promo';
 
 /* ------------------------------------------------------------------------ */
+/* Operators (Phase 9)                                                      */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Development operator accounts, one per role.
+ *
+ * THE PASSWORDS ARE PRINTED IN THIS FILE ON PURPOSE, and that is only
+ * acceptable because they are DEVELOPMENT FIXTURES in a seed script that a
+ * production deployment never runs. A real deployment creates its first admin
+ * out of band and the rest through an invite flow.
+ *
+ * They are still hashed with scrypt before storage - the seed does not get a
+ * shortcut past the hashing, because a shortcut in seeding is how a plaintext
+ * password ends up in a table.
+ */
+const OPERATORS: readonly [string, string, string, string, 'viewer' | 'compliance' | 'admin'][] = [
+  ['opr_admin', 'admin@atl.example', 'Priya (admin fixture)', 'atl-dev-admin-9f2b', 'admin'],
+  ['opr_compliance', 'compliance@atl.example', 'Rahul (compliance fixture)', 'atl-dev-compliance-4c7e', 'compliance'],
+  ['opr_viewer', 'viewer@atl.example', 'Ananya (viewer fixture)', 'atl-dev-viewer-1a8d', 'viewer'],
+];
+
+/* ------------------------------------------------------------------------ */
 /* Seeding                                                                  */
 /* ------------------------------------------------------------------------ */
 
@@ -531,6 +554,16 @@ async function seed(pool: Pool, logger: Logger, rotateKeys: boolean): Promise<vo
           key.publicKeySpkiB64,
           key.fingerprint,
         ],
+      );
+    }
+
+    for (const [id, email, displayName, password, role] of OPERATORS) {
+      await client.query(
+        `INSERT INTO operators (id, email, display_name, password_hash, role)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+                                           role = EXCLUDED.role`,
+        [id, email, displayName, await hashPassword(password), role],
       );
     }
 

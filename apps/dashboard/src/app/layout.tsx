@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import './globals.css';
+import { currentPrincipal } from '@/lib/api';
 
 export const metadata: Metadata = {
   title: 'ATL-India Console',
@@ -44,7 +45,9 @@ const NAV = [
   },
 ];
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const principal = await currentPrincipal();
+
   return (
     <html lang="en">
       <body>
@@ -65,6 +68,38 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 ))}
               </div>
             ))}
+
+            {/*
+              Who the console is acting as.
+              A shared key means NO verified identity is recorded for anything
+              done through it, and that has to be visible rather than inferred.
+            */}
+            <div className="nav-group">
+              <div className="nav-label">Signed in</div>
+              {principal === null ? (
+                <Link className="nav-item" href="/login">Sign in →</Link>
+              ) : principal.verifiedIdentity ? (
+                <div style={{ padding: '0 10px' }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{principal.displayName}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                    role: {principal.role}
+                  </div>
+                  <Link className="nav-item" href="/login" style={{ padding: '4px 0' }}>
+                    Switch or sign out
+                  </Link>
+                </div>
+              ) : (
+                <div style={{ padding: '0 10px' }}>
+                  <span className="pill pill-flag">shared key</span>
+                  <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
+                    No verified identity is being recorded.
+                  </div>
+                  <Link className="nav-item" href="/login" style={{ padding: '4px 0' }}>
+                    Sign in properly →
+                  </Link>
+                </div>
+              )}
+            </div>
 
             {/*
               The standing disclaimer, in the chrome rather than on a page.

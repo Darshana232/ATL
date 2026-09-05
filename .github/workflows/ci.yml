@@ -1,0 +1,104 @@
+# ===========================================================================
+# CI — the first automated gate this repository has had.
+#
+# It runs what a reviewer would run: does it type-check, does it lint, do the
+# migrations apply to an EMPTY database in order, and do all the tests pass.
+#
+# IT DOES NOT DEPLOY. A green build should mean "this would work", not "this is
+# now live". Coupling the two means every deploy needs a passing test suite and
+# every test failure blocks a hotfix, which is how teams end up disabling CI.
+#
+# THE MIGRATION STEP IS THE ONE THAT EARNS ITS PLACE. Locally, migrations have
+# only ever been applied incrementally to a database that already had the
+# earlier ones. CI applies all eleven to an empty database every run, which is
+# the only way to find out that migration 7 depends on something migration 4
+# created and later dropped.
+# ===========================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Cancel superseded runs. A queue of stale builds on an old commit tells you
+# nothing and costs minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        # Pinned to the version we develop against. "postgres:latest" means the
+        # build breaks on a day nobody changed anything.
+        image: postgres:16
+        env:
+          POSTGRES_USER: atl_owner
+          POSTGRES_PASSWORD: atl_ci_password
+          POSTGRES_DB: atl_india_ci
+        ports: ['5432:5432']
+        # Without a health check the test step races the database's first-boot
+        # initialisation and fails intermittently — the worst kind of CI failure.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://atl_app@localhost:5432/atl_india_ci
+      DATABASE_ADMIN_URL: postgres://atl_owner:atl_ci_password@localhost:5432/atl_india_ci
+      NODE_ENV: test
+      LOG_LEVEL: fatal
+      # CI-only values. Not secrets: they guard a throwaway database that exists
+      # for six minutes. Real deployments take these from a secret store.
+      ADMIN_API_KEY: ci-admin-key-0123456789abcdef0123456789abcdef
+      VOUCHER_SIGNING_SECRET: '1111111111111111111111111111111111111111111111111111111111111111'
+      AUDIT_CHECKPOINT_SECRET: '2222222222222222222222222222222222222222222222222222222222222222'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # The application role is created by migration 0005, but it needs LOGIN
+      # rights and a trust grant that a containerised Postgres does not give by
+      # default. Created here so the least-privilege split is exercised in CI
+      # exactly as it is locally — otherwise db/roles.test.ts silently skips and
+      # we would stop testing the privilege boundary at all.
+      - name: Prepare the application role
+        run: |
+          PGPASSWORD=atl_ci_password psql -h localhost -U atl_owner -d atl_india_ci \
+            -c "CREATE ROLE atl_app LOGIN PASSWORD 'atl_ci_password';" || true
+          echo "DATABASE_URL=postgres://atl_app:atl_ci_password@localhost:5432/atl_india_ci" >> "$GITHUB_ENV"
+
+      - name: Apply migrations to an EMPTY database
+        run: npm run migrate
+
+      - name: Seed fixtures
+        run: npm run seed
+
+      - name: Test
+        run: npm run test
+
+      - name: Build the dashboard
+        run: npm run build -w apps/dashboard
+        env:
+          ATL_API_BASE_URL: http://127.0.0.1:8080

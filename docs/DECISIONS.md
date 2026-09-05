@@ -693,3 +693,73 @@ somebody "improves" the wording.
 **Tradeoff.** The responses are wordier and the screens are less clean. Accepted:
 `CLAUDE.md` §33 forbids presenting a simulated or unapproved system as a real
 one, and a design that makes the caveat easy to crop is a design that removes it.
+
+---
+
+## ADR-0024 — docker-compose.yml stays, still unrun, and says so
+**Date:** 2026-09-05 · **Status:** accepted · Supplements ADR-0004
+
+**Decision.** Keep the committed `docker-compose.yml`, do **not** claim it
+works, and cover the risk it exists for through CI instead.
+
+**Context.** ADR-0004 chose Homebrew PostgreSQL because installing Docker meant
+a ~1 GB download and admin rights before writing any code, and committed a
+compose file "for teammates and CI". Phase 9 checked: Docker is still not
+installed (`which docker` → not found), so the file has still never been run.
+
+**The honest options were three.** Delete it (loses the path for a teammate who
+does have Docker); run it (cannot — no Docker); or keep it and label it
+accurately. We chose the third, and sharpened the label from "not exercised on
+the primary dev machine" to **"this file has still never been run"**, which is
+the actual fact.
+
+**What replaces it.** `.github/workflows/ci.yml` runs `postgres:16` as a
+service container and applies **all eleven migrations to an empty database** on
+every run. That covers the real risk — "does the schema build from scratch in a
+container, in order?" — which local incremental migration never tests. The
+compose file's remaining value is developer convenience, not verification.
+
+**Honest limit.** The CI workflow is committed and has not yet run on GitHub
+Actions. Until it does, "CI covers this" is a design claim, not an observed
+result, and is written that way in the file.
+
+---
+
+## ADR-0025 — oxlint instead of ESLint, forced by TypeScript 7
+**Date:** 2026-09-05 · **Status:** accepted
+
+**Decision.** Lint with **oxlint**. ESLint plus `typescript-eslint` was the
+first choice and could not be installed.
+
+**Context.** `typescript-eslint@8` declares `typescript@>=4.8.4 <6.1.0` and
+**hard-refuses at runtime** on TypeScript 7 — not a peer warning that
+`--legacy-peer-deps` papers over, an explicit `throw` on import. The suggested
+workaround is running a second, older TypeScript API side by side, which is a
+lot of machinery for a linter.
+
+**Tradeoff, and it is a real loss.** oxlint parses TypeScript natively with no
+dependency on the TS compiler API — which is exactly why it works, and also why
+it cannot do **type-aware** linting. We lose `no-floating-promises`, which is
+the single rule most likely to catch a real bug in an async codebase like this
+one. `await-thenable` and `no-misused-promises` go with it.
+
+**What we kept.** `eqeqeq` (smart), `no-var`, `prefer-const`,
+`no-param-reassign`, `no-eval`/`no-implied-eval`/`no-new-func`,
+`no-async-promise-executor`, `no-explicit-any`, `no-loss-of-precision`. Rules
+chosen against one test: would this have caught a real bug from this project's
+history?
+
+**Rules deliberately off.** `no-unused-vars` — `tsc` already reports it with
+better messages, and two tools reporting the same thing trains people to read
+neither. `require-await` — a false positive here: Fastify plugin functions and
+async interface implementations must carry the keyword to satisfy a signature
+whether or not they await internally.
+
+**Also recorded.** Uninstalling ESLint pruned `vite`, a transitive dependency of
+vitest, and the whole test suite failed to start with `Cannot find package
+'vite'`. Fixed by reinstalling. A reminder that `npm uninstall` prunes the tree
+and that a green test run before a dependency change is not evidence about
+after it.
+
+**Revisit when** typescript-eslint supports TypeScript 7 (their issue #10940).
+The type-aware rules are worth coming back for.

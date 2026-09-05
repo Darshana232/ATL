@@ -4,10 +4,14 @@
  * NAMED `console`, NOT `dashboard`, on purpose: these are the API's operator
  * reads. The dashboard is one client of them and holds no privilege of its own.
  *
- * ALL ADMIN-KEY GUARDED. These return merchant names, amounts, mandate ids and
- * agent identities. Phase 3 left mandate reads open, which was already wrong;
- * this phase does not add more open reads. Per-user RBAC is Phase 9, and it is
- * listed as gap ATL-C22 in the coverage report rather than quietly omitted.
+ * ALL REQUIRE A SIGNED-IN OPERATOR with at least the `viewer` role. These
+ * return merchant names, amounts, mandate ids, agent identities and (through
+ * decisions) the user's natural-language intent.
+ *
+ * Phase 8 guarded them with the shared admin key, which was better than nothing
+ * and still recorded no per-caller identity. Phase 9 replaced it with real
+ * sessions - closing gap ATL-C22, which the coverage report had been printing
+ * on a screen.
  *
  * EVERY LIST IS KEYSET-PAGINATED and every page size is capped server-side. A
  * dashboard that can ask for a million rows is a denial-of-service tool with a
@@ -16,7 +20,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { Config } from '../config.js';
 import type { Pool } from '../db/pool.js';
-import { requireAdminKey } from '../middleware/admin-auth.js';
+import { requireRole } from '../middleware/session-auth.js';
 
 export interface ConsoleRoutesDeps {
   readonly pool: Pool;
@@ -31,7 +35,9 @@ const cap = (value: unknown, fallback = 50, max = 200): number => {
 
 export function consoleRoutes(deps: ConsoleRoutesDeps): FastifyPluginAsync {
   const { pool, config } = deps;
-  const adminOnly = { preHandler: requireAdminKey(config) };
+  // viewer is the floor: reading evidence is the least privileged thing an
+  // operator does, and everything here is a read.
+  const adminOnly = { preHandler: requireRole({ pool, config }, 'viewer') };
 
   return async function register(app) {
     /* --- Overview: the numbers on the front page --------------------- */

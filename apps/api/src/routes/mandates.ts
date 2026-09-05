@@ -14,7 +14,7 @@ import type { Config } from '../config.js';
 import type { Pool } from '../db/pool.js';
 import { withTransaction } from '../db/transaction.js';
 import { appendAuditEvent } from '../audit/writer.js';
-import { requireAdminKey } from '../middleware/admin-auth.js';
+import { requireRole } from '../middleware/session-auth.js';
 import {
   InvalidIfscError,
   lookupBankSafely,
@@ -119,13 +119,22 @@ function termsForAudit(terms: MandateTerms): Record<string, CanonicalValue> {
 
 export function mandateRoutes(deps: MandateRoutesDeps): FastifyPluginAsync {
   const { pool, config, bankLookup } = deps;
-  const adminOnly = { preHandler: requireAdminKey(config) };
+  /**
+   * Creating, amending and revoking a mandate all change what an agent may
+   * spend, so they are ADMIN actions. Reading one is a VIEWER action.
+   *
+   * Phase 3 left the reads OPEN and said so in PROJECT_STATE's known gaps; the
+   * coverage report has been printing it as ATL-C22 since Phase 8. Closing it
+   * here is the point of this phase.
+   */
+  const canWrite = { preHandler: requireRole({ pool, config }, 'admin') };
+  const canRead = { preHandler: requireRole({ pool, config }, 'viewer') };
 
   return async (app: FastifyInstance): Promise<void> => {
     /* ------------------------------------------------------------------ */
     /* POST /v1/mandates - create a mandate and its version 1              */
     /* ------------------------------------------------------------------ */
-    app.post('/v1/mandates', adminOnly, async (request, reply) => {
+    app.post('/v1/mandates', canWrite, async (request, reply) => {
       const parsed = createMandateBodySchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.code(400).send(toValidationErrorBody(parsed.error));
@@ -251,7 +260,7 @@ export function mandateRoutes(deps: MandateRoutesDeps): FastifyPluginAsync {
     /* ------------------------------------------------------------------ */
     /* GET /v1/mandates/:id                                               */
     /* ------------------------------------------------------------------ */
-    app.get<{ Params: { id: string } }>('/v1/mandates/:id', async (request, reply) => {
+    app.get<{ Params: { id: string } }>('/v1/mandates/:id', canRead, async (request, reply) => {
       const loaded = await loadForAuthorization(pool, request.params.id);
 
       if (loaded === null) {
@@ -268,7 +277,7 @@ export function mandateRoutes(deps: MandateRoutesDeps): FastifyPluginAsync {
     /* ------------------------------------------------------------------ */
     /* GET /v1/mandates/:id/versions                                      */
     /* ------------------------------------------------------------------ */
-    app.get<{ Params: { id: string } }>('/v1/mandates/:id/versions', async (request, reply) => {
+    app.get<{ Params: { id: string } }>('/v1/mandates/:id/versions', canRead, async (request, reply) => {
       const versions = await listVersions(pool, request.params.id);
 
       if (versions.length === 0) {
@@ -290,6 +299,7 @@ export function mandateRoutes(deps: MandateRoutesDeps): FastifyPluginAsync {
     /* ------------------------------------------------------------------ */
     app.get<{ Params: { id: string; version: string } }>(
       '/v1/mandates/:id/versions/:version',
+      canRead,
       async (request, reply) => {
         const versionNumber = Number(request.params.version);
 
@@ -318,7 +328,7 @@ export function mandateRoutes(deps: MandateRoutesDeps): FastifyPluginAsync {
     /* ------------------------------------------------------------------ */
     /* POST /v1/mandates/:id/versions - supersede the terms               */
     /* ------------------------------------------------------------------ */
-    app.post<{ Params: { id: string } }>('/v1/mandates/:id/versions', adminOnly, async (request, reply) => {
+    app.post<{ Params: { id: string } }>('/v1/mandates/:id/versions', canWrite, async (request, reply) => {
       const parsed = addVersionBodySchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.code(400).send(toValidationErrorBody(parsed.error));
@@ -406,7 +416,7 @@ export function mandateRoutes(deps: MandateRoutesDeps): FastifyPluginAsync {
     /* ------------------------------------------------------------------ */
     /* POST /v1/mandates/:id/revoke                                       */
     /* ------------------------------------------------------------------ */
-    app.post<{ Params: { id: string } }>('/v1/mandates/:id/revoke', adminOnly, async (request, reply) => {
+    app.post<{ Params: { id: string } }>('/v1/mandates/:id/revoke', canWrite, async (request, reply) => {
       const parsed = revokeMandateBodySchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.code(400).send(toValidationErrorBody(parsed.error));

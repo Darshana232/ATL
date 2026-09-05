@@ -80,8 +80,12 @@ export interface ControlDefinition {
 }
 
 /**
- * Twenty-six controls we consider in scope. Twenty are built; six are not, and
- * they are listed here precisely BECAUSE they are not.
+ * Twenty-six controls we consider in scope. Twenty-two are built; four are not,
+ * and they are listed here precisely BECAUSE they are not.
+ *
+ * ATL-C22 (RBAC) and ATL-C23 (rate limiting) moved from unbuilt to built in
+ * Phase 9. That is the report working as intended: it named two gaps on a
+ * screen, and naming them is what got them fixed.
  *
  * NOTE ON THE NUMBER 26. The FREE-AI report contains 26 recommendations, and
  * this list happens to contain 26 controls. That is a coincidence of scope, NOT
@@ -341,6 +345,38 @@ export const CONTROLS: readonly ControlDefinition[] = [
       'detection and must never be described as such.',
   },
   {
+    id: 'ATL-C22',
+    title: 'Role-based access control for human operators',
+    description:
+      'Console and admin actions are authenticated per operator with a role, ' +
+      'not by a shared key. Sessions are revocable immediately.',
+    sutra: 'Accountability', pillar: 'Protection',
+    evidenceQuery: `SELECT count(*)::bigint AS count,
+                           string_agg(DISTINCT role, ', ' ORDER BY role) AS sample
+                      FROM operators WHERE status = 'active'`,
+    evidenceLabel: 'active operator accounts with assigned roles',
+    limitation:
+      'The shared admin key still works as a fallback for non-interactive ' +
+      'tooling. It grants the admin role, records NO per-caller identity, and ' +
+      'is logged loudly on every use. Demoted, not removed.',
+  },
+  {
+    id: 'ATL-C23',
+    title: 'Rate limiting on the authorization and login paths',
+    description:
+      'Per-agent limits on authorize and pay; per-IP limits on login, with ' +
+      'account lockout after repeated failures.',
+    sutra: 'Safety, Resilience and Sustainability', pillar: 'Infrastructure',
+    evidenceQuery: `SELECT count(*)::bigint AS count, NULL::text AS sample
+                      FROM operators WHERE failed_logins >= 0`,
+    evidenceLabel: 'accounts subject to failed-login tracking and lockout',
+    limitation:
+      'The limiter is IN PROCESS and uses a fixed window. Two API instances ' +
+      'mean two counters and twice the effective limit, and a burst can ' +
+      'straddle a window reset. Correct at one instance; a shared store is the ' +
+      'fix at scale.',
+  },
+  {
     id: 'ATL-C20',
     title: 'Simulated components are labelled in the data',
     description:
@@ -374,38 +410,6 @@ export const UNBUILT_CONTROLS: readonly ControlDefinition[] = [
         'revocation ends an authority, withdrawal of consent is a DPDP right ' +
         'with its own record, timing and downstream deletion obligations.',
       plannedIn: 'post-MVP',
-    },
-  },
-  {
-    id: 'ATL-C22',
-    title: 'Role-based access control for human operators',
-    description:
-      'Dashboard and admin actions are authenticated per user with roles, not ' +
-      'by a shared key.',
-    sutra: 'Accountability', pillar: 'Protection',
-    evidenceQuery: '', evidenceLabel: 'user sessions and role assignments',
-    limitation: null,
-    notImplemented: {
-      reason:
-        'Mandate mutation is currently guarded by ONE SHARED ADMIN KEY with no ' +
-        'rotation and no per-caller identity. `createdBy` therefore records a ' +
-        'CLAIM about who acted, not a verified identity.',
-      plannedIn: 'Phase 9',
-    },
-  },
-  {
-    id: 'ATL-C23',
-    title: 'Rate limiting and abuse controls',
-    description: 'Per-agent and per-IP request limits on the authorization path.',
-    sutra: 'Safety, Resilience and Sustainability', pillar: 'Infrastructure',
-    evidenceQuery: '', evidenceLabel: 'rate limit rejections',
-    limitation: null,
-    notImplemented: {
-      reason:
-        'A valid credential can currently make unlimited requests. Each takes a ' +
-        'row lock on its OWN mandate, so an agent degrades only itself - bounded, ' +
-        'but not a control.',
-      plannedIn: 'Phase 9',
     },
   },
   {

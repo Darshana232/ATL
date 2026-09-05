@@ -52,16 +52,16 @@ describe('every console endpoint requires the admin key', () => {
 describe('overview', () => {
   it('returns consistent counts from one query', async () => {
     const body = (await get('/v1/console/overview')).json() as Record<string, never>;
-    const decisions = body.decisions as unknown as Record<string, number>;
+    const d = body.decisions as unknown as { total: number; pass: number; flag: number; block: number };
 
-    expect(decisions.total).toBe(decisions.pass + decisions.flag + decisions.block);
+    expect(d.total).toBe(d.pass + d.flag + d.block);
   });
 
   it('surfaces how much of the captured total is SIMULATED', async () => {
     // A dashboard must not be able to show a settled total without saying how
     // much of it is simulated.
     const body = (await get('/v1/console/overview')).json() as Record<string, never>;
-    const payments = body.payments as unknown as Record<string, number>;
+    const payments = body.payments as unknown as { simulatedCaptured: number };
 
     expect(payments.simulatedCaptured).toBeGreaterThan(0);
     expect(String(body.simulation)).toContain('SIMULATED');

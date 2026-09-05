@@ -3,7 +3,7 @@
 **Read this first in any new session.** It exists so the kickoff analysis is
 never repeated. Update it at the end of every phase.
 
-**Last updated:** 2026-09-05 · **Current phase:** 8 complete, 9 in progress
+**Last updated:** 2026-09-05 · **Current phase:** ALL NINE COMPLETE
 
 Two documentation sets, different audiences:
 - `docs/` — how it works and what was decided (operate/extend)
@@ -30,7 +30,7 @@ product. Consolidated from thirteen on 2026-09-05 — see **ADR-0014**. Phases
 | 6 | Hash-chained audit trail + `/verify` + tamper demo | ✅ complete |
 | 7 | Payments (adapters + webhooks) **and** the agent runtime (catalog, scoped tools, injection test, MCP) | ✅ complete |
 | 8 | Dashboard **and** reports (FREE-AI coverage, STR draft, DPDP register) | ✅ complete |
-| 9 | Hardening: threat model, RBAC, rate limits, ESLint, CI, observability, deploy, demo | ⬜ |
+| 9 | Hardening: threat model, RBAC, rate limits, lint, CI, deploy, demo | ✅ complete |
 
 A plain-English companion to this roadmap — one file per phase, plus 67 concept
 cards and a file-by-file codebase tour — lives in
@@ -251,24 +251,56 @@ correct with per-merchant chains.
 
 ---
 
-## Next work unit — Phase 9: hardening and shipping
+## Added in Phase 9
 
-Write the before-half of `Understanding/PHASE_09_hardening.md` first.
+```
+apps/api/src/
+  auth/password.ts          scrypt hashing; constant-time verify; timing burn
+  auth/session.ts           revocable tokens, cookie attributes, ranked roles
+  middleware/session-auth.ts requireRole(); the shared key, demoted
+  middleware/rate-limit.ts  fixed-window limiter, bounded memory
+  middleware/agent-rate-limit.ts  one limiter across both agent endpoints
+  repositories/operator.ts  accounts, sessions, lockout
+  routes/auth.ts            login, logout, whoami, revoke-all-sessions
+  demo/full-demo.ts         SEVEN ACTS - the whole story in one command
+  db/migrations/0011_operators.sql
+apps/dashboard/src/app/login/  per-operator sign-in via a Server Action
+.oxlintrc.json               lint rules chosen against real bugs from history
+.github/workflows/ci.yml     typecheck, lint, migrations on an EMPTY database,
+                             seed, full suite, dashboard build
+docs/THREAT_MODEL.md         STRIDE + accepted risks, each naming its test
+docs/SECURITY.md             what we claim, precisely
+```
 
-One "make it shippable" pass (ADR-0014):
+**Verified working:** 671 tests green, `tsc --noEmit` clean in both workspaces,
+`oxlint --deny-warnings` clean, `next build` clean, and RBAC checked over real
+HTTP — viewer 403s on a mandate mutation, compliance 403s on a checkpoint,
+anonymous 401s everywhere, and `generatedBy` now records the **verified**
+operator id rather than a caller-supplied string.
 
-1. **Threat model** — `docs/THREAT_MODEL.md`, STRIDE over the three trust zones,
-   with each mitigation pointing at the test that proves it.
-2. **RBAC and user sessions** — closes gap ATL-C22. Replaces the shared admin
-   key; makes `createdBy` a verified identity rather than a claim. Also closes
-   the open mandate READ endpoints inherited from Phase 3.
-3. **Rate limiting** — closes gap ATL-C23.
-4. **ESLint + Prettier**, and CI running typecheck, lint and the full suite.
-5. **Observability** — request/agent/mandate/decision ids already flow through
-   the logs; add timing and a trace view.
-6. **Deployment** — the committed `docker-compose.yml` has never been run
-   (ADR-0004). Either exercise it or say so in the README.
-7. **Demo polish** — one script that tells the whole story end to end.
+**Coverage moved 20/26 → 22/26.** ATL-C22 (RBAC) and ATL-C23 (rate limiting)
+were closed because the report printed them on a screen. Four remain, and all
+four need something other than code.
+
+---
+
+## The project is complete
+
+Every phase is done. What remains is honest debt, and all of it is either
+printed in the coverage report or listed in `docs/THREAT_MODEL.md` under
+**accepted risks**:
+
+- **Criterion B1 (merchant validation) is still MISSING** — gap ATL-C26. No
+  interviews have taken place, and the research quotes remain fabricated.
+- **No Razorpay test keys**, so `RazorpayTestProvider` has never run against
+  the live API.
+- **`docker-compose.yml` has still never been run** (ADR-0024).
+- **CI has never run** — the workflow is committed but unverified on Actions.
+- **No type-aware linting** until typescript-eslint supports TypeScript 7
+  (ADR-0025).
+- **Reading evidence is not audited**; report generation is.
+- **In-process rate limiting** does not survive horizontal scaling.
+- **The shared admin key** still grants admin with no verified identity.
 
 ## Documentation structure — SETTLED
 
@@ -299,20 +331,25 @@ phase numbering, `Understanding/` wins. Do not resume work from it.
   `RESEARCH_REALITY_CHECK.md` item 10.
 - No Razorpay test-mode keys yet; payment leg will be `MockUpiProvider` until
   they exist (ADR-0009).
-- `docker-compose.yml` is committed but has never been run (ADR-0004).
-- No CI yet; no linter configured yet (ESLint arrives with Phase 11 hardening,
-  or sooner if churn justifies it).
-- **Read endpoints are unauthenticated**, and the mandate-mutation admin key is
-  one shared secret with no rotation or per-caller identity — so `createdBy`
-  records a *claim* about who acted, not a verified identity. Phase 5 fixed this
-  for `POST /v1/authorize` (real Ed25519 signatures); mandate mutation needs
-  user sessions with RBAC, which is Phase 9.
+- `docker-compose.yml` is committed and **has still never been run** — Docker is
+  not installed (ADR-0004, ADR-0024). CI covers the same risk by applying every
+  migration to an empty `postgres:16` container.
+- CI and lint arrived in Phase 9. **The CI workflow has never run** — it is
+  committed and unverified. Linting is oxlint, not ESLint, because
+  typescript-eslint hard-refuses TypeScript 7 (ADR-0025), which costs the
+  type-aware rules.
+- ~~Read endpoints are unauthenticated~~ **CLOSED in Phase 9.** Every read now
+  requires a session with at least `viewer`, and `createdBy`/`generatedBy`
+  record a verified operator id. The shared admin key survives as a demoted
+  fallback for non-interactive tooling: it grants admin, records no per-caller
+  identity, is logged loudly, and is surfaced in the console as
+  `verifiedIdentity: false`.
 - `authorization_requests.signature_verified` **can only ever be true**, because
   a failed-signature request cannot satisfy that row's foreign keys. Rejections
   are recorded in the audit chain instead. See PHASE_05 §12.
-- **No rate limiting.** A valid credential can make unlimited requests. Each
-  takes a row lock on its own mandate, so an agent degrades only its own
-  throughput — bounded, but Phase 9 work.
+- ~~No rate limiting~~ **CLOSED in Phase 9** — 120/min per authenticated agent,
+  10/min per IP on login, lockout after five failures. Still in-process, so N
+  API instances allow N× the limit.
 - `appendAuditEvent` cannot verify it is inside a transaction; enforced by
   documentation and the `txClient` parameter name.
 - Route and audit tests permanently add rows (those tables are append-only by

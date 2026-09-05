@@ -22,6 +22,7 @@ import { paymentRoutes } from './routes/payments.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { reportRoutes } from './routes/reports.js';
 import { consoleRoutes } from './routes/console.js';
+import { authRoutes } from './routes/auth.js';
 import { selectPaymentProvider, type PaymentProvider } from './providers/payment.js';
 import { RazorpayIfscProvider, type BankLookupProvider } from './providers/bank-lookup.js';
 import { MockRiskProvider, type RiskProvider } from './providers/risk.js';
@@ -45,6 +46,12 @@ export interface ServerDependencies {
   /** Injectable clock for the authorization path. Tests drive time directly. */
   now?: () => Date;
   /**
+   * Login attempts per minute per IP. Defaults to the production value; a test
+   * suite that signs in repeatedly raises it so the limiter does not make the
+   * suite order-dependent.
+   */
+  loginAttemptsPerMinute?: number;
+  /**
    * Payment execution. Defaults to the SIMULATED mock UPI rail unless Razorpay
    * TEST-mode keys are configured - so nothing ever calls an external payment
    * API by accident, from a test suite or a demo.
@@ -67,6 +74,7 @@ export function buildServer({
   risk,
   now,
   payments,
+  loginAttemptsPerMinute,
 }: ServerDependencies): FastifyInstance {
   const app = Fastify({
     /**
@@ -181,6 +189,7 @@ export function buildServer({
   app.register(webhookRoutes({ pool, config }));
   app.register(reportRoutes({ pool, config, now }));
   app.register(consoleRoutes({ pool, config }));
+  app.register(authRoutes({ pool, config, now, loginAttemptsPerMinute }));
 
   /* --- 404 -------------------------------------------------------------- */
   app.setNotFoundHandler((request, reply) => {

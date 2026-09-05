@@ -387,18 +387,27 @@ describe('cold-path bank lookup', () => {
   });
 });
 
+/*
+ * NOTE: mandate READS required no credentials until Phase 9.
+ *
+ * PROJECT_STATE listed that as a known gap from Phase 3, and the FREE-AI
+ * coverage report printed it as ATL-C22 from Phase 8. It is now closed: reads
+ * need at least the `viewer` role. These tests pass the shared admin key, which
+ * still satisfies that - see routes/auth.test.ts for the real session path and
+ * for the assertion that an unauthenticated read is refused.
+ */
 describe('GET /v1/mandates/:id', () => {
   it('returns the mandate with its current version', async () => {
     const mandateId = await createMandate();
 
-    const response = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}` });
+    const response = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}`, headers: auth });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().mandate.id).toBe(mandateId);
   });
 
   it('404s for an unknown mandate', async () => {
-    const response = await app.inject({ method: 'GET', url: '/v1/mandates/mnd_test_missing' });
+    const response = await app.inject({ method: 'GET', url: '/v1/mandates/mnd_test_missing', headers: auth });
 
     expect(response.statusCode).toBe(404);
     expect(response.json().error).toBe('not_found');
@@ -446,8 +455,8 @@ describe('POST /v1/mandates/:id/versions', () => {
       },
     });
 
-    const v1 = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}/versions/1` });
-    const current = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}` });
+    const v1 = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}/versions/1`, headers: auth });
+    const current = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}`, headers: auth });
 
     expect(v1.json().version.terms.perTxnLimitPaise).toBe(200_000); // untouched
     expect(current.json().mandate.currentVersion.terms.perTxnLimitPaise).toBe(400_000);
@@ -469,7 +478,7 @@ describe('POST /v1/mandates/:id/versions', () => {
       },
     });
 
-    const response = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}/versions` });
+    const response = await app.inject({ method: 'GET', url: `/v1/mandates/${mandateId}/versions`, headers: auth });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().versions.map((v: { version: number }) => v.version)).toEqual([1, 2]);
@@ -481,6 +490,7 @@ describe('POST /v1/mandates/:id/versions', () => {
     const response = await app.inject({
       method: 'GET',
       url: `/v1/mandates/${mandateId}/versions/99`,
+      headers: auth,
     });
 
     expect(response.statusCode).toBe(404);
@@ -492,6 +502,7 @@ describe('POST /v1/mandates/:id/versions', () => {
     const response = await app.inject({
       method: 'GET',
       url: `/v1/mandates/${mandateId}/versions/latest`,
+      headers: auth,
     });
 
     expect(response.statusCode).toBe(400);

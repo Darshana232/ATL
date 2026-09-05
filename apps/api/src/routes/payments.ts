@@ -25,6 +25,7 @@ import type { Pool } from '../db/pool.js';
 import { withTransaction } from '../db/transaction.js';
 import { appendAuditEvent } from '../audit/writer.js';
 import { requireAgentSignature } from '../middleware/agent-auth.js';
+import { agentRateLimit } from '../middleware/agent-rate-limit.js';
 import { verifyVoucher } from '../voucher/voucher.js';
 import type { PaymentProvider } from '../providers/payment.js';
 import {
@@ -72,7 +73,8 @@ export function paymentRoutes(deps: PaymentRoutesDeps): FastifyPluginAsync {
   return async function register(app) {
     app.post(
       '/v1/payments',
-      { preHandler: requireAgentSignature({ pool, now: clock }) },
+      // Authenticate, then limit. See the note in routes/authorize.ts.
+      { preHandler: [requireAgentSignature({ pool, now: clock }), agentRateLimit(clock)] },
       async (request, reply) => {
         const agent = request.atlAgent;
         if (agent === undefined) {

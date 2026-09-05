@@ -13,7 +13,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { Config } from '../config.js';
 import type { Pool } from '../db/pool.js';
 import { withTransaction } from '../db/transaction.js';
-import { requireAdminKey } from '../middleware/admin-auth.js';
+import { requireRole } from '../middleware/session-auth.js';
 import { verifyChain, TAMPER_EVIDENT_NOTICE } from '../audit/verifier.js';
 import { signCheckpoint } from '../audit/checkpoint.js';
 import { appendAuditEvent, DEFAULT_CHAIN_ID } from '../audit/writer.js';
@@ -40,7 +40,11 @@ const CHAIN_ID_PATTERN = /^[a-z0-9_]{1,64}$/;
 export function auditRoutes(deps: AuditRoutesDeps): FastifyPluginAsync {
   const { pool, config } = deps;
   const clock = deps.now ?? (() => new Date());
-  const adminOnly = { preHandler: requireAdminKey(config) };
+  // Verifying and reading the chain is a viewer action. CREATING a checkpoint
+  // writes a signed anchor that later verifications are judged against, so it
+  // is an admin action.
+  const adminOnly = { preHandler: requireRole({ pool, config, now: clock }, 'viewer') };
+  const canAnchor = { preHandler: requireRole({ pool, config, now: clock }, 'admin') };
 
   return async function register(app) {
     /* --------------------------------------------------------------------
@@ -140,7 +144,7 @@ export function auditRoutes(deps: AuditRoutesDeps): FastifyPluginAsync {
      * ------------------------------------------------------------------ */
     app.post<{ Body?: { chainId?: string; createdBy?: string } }>(
       '/v1/audit/checkpoint',
-      adminOnly,
+      canAnchor,
       async (request, reply) => {
         const chainId = request.body?.chainId ?? DEFAULT_CHAIN_ID;
         const createdBy = request.body?.createdBy ?? 'admin';

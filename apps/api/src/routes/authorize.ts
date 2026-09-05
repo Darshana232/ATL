@@ -20,6 +20,7 @@ import type { Pool } from '../db/pool.js';
 import { withTransaction } from '../db/transaction.js';
 import { appendAuditEvent } from '../audit/writer.js';
 import { requireAgentSignature } from '../middleware/agent-auth.js';
+import { agentRateLimit } from '../middleware/agent-rate-limit.js';
 import { evaluate } from '../policy/engine.js';
 import { toPaise } from '../money.js';
 import { loadForAuthorization } from '../repositories/mandate.js';
@@ -104,7 +105,20 @@ export function authorizeRoutes(deps: AuthorizeRoutesDeps): FastifyPluginAsync {
   return async function register(app) {
     app.post(
       '/v1/authorize',
-      { preHandler: requireAgentSignature({ pool, now: clock }) },
+      {
+        /**
+         * ORDER MATTERS: authenticate FIRST, then limit.
+         *
+         * Limiting before authentication would mean counting against a key id
+         * an unauthenticated caller chose - so an attacker could exhaust
+         * another agent's budget by sending garbage with their key id in it.
+         * Denial of service through the rate limiter itself.
+         */
+        preHandler: [
+          requireAgentSignature({ pool, now: clock }),
+          agentRateLimit(clock),
+        ],
+      },
       async (request, reply) => {
         // The guard either set this or already replied 401. Checking again is
         // not paranoia: it makes a future refactor that drops the preHandler a

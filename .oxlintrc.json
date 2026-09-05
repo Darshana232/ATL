@@ -1,0 +1,51 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/.next/**",
+    "Research/**",
+    "Claude/**",
+    "Concepts Learning and Understanding/**"
+  ],
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "rules": {
+    "eqeqeq": [
+      "error",
+      "smart"
+    ],
+    "no-var": "error",
+    "prefer-const": "error",
+    "no-param-reassign": "error",
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    "no-new-func": "error",
+    "require-await": "off",
+    "no-async-promise-executor": "error",
+    "no-await-in-loop": "off",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unused-vars": "off",
+    "no-unused-vars": "off",
+    "no-console": "off"
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/demo/*.ts",
+        "**/db/seed.ts",
+        "**/mcp/*.ts"
+      ],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "no-console": "off",
+        "require-await": "off"
+      }
+    }
+  ]
+}

@@ -1,9 +1,19 @@
 # ===========================================================================
 # Alternative local database: PostgreSQL in a container.
 #
-# STATUS: committed for reproducibility (teammates, CI, and any machine that
-# has Docker) but NOT exercised on the primary dev machine, which uses
-# Homebrew postgresql@16 instead. See docs/DECISIONS.md ADR-0004.
+# STATUS, as of Phase 9 and stated plainly rather than implied:
+#
+#   THIS FILE HAS STILL NEVER BEEN RUN. Docker is not installed on the primary
+#   development machine (`which docker` -> not found), which uses Homebrew
+#   postgresql@16. See ADR-0004, and ADR-0024 for why it is still here.
+#
+#   What IS exercised: .github/workflows/ci.yml runs `postgres:16` as a service
+#   container and applies all eleven migrations to an EMPTY database on every
+#   run. That covers the same risk this file exists to cover - "does the schema
+#   build from scratch in a container?" - through a different mechanism.
+#
+#   So: unverified as a compose file, and the risk it addresses is covered
+#   elsewhere. Both halves of that sentence matter.
 #
 # Usage where Docker is available:
 #   docker compose up -d db

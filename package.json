@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "oxlint --deny-warnings",
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run dev -w apps/api",
@@ -27,6 +27,12 @@
     "demo:authorize": "npm run demo:authorize -w apps/api",
     "demo:tamper": "npm run demo:tamper -w apps/api",
     "demo:agent": "npm run demo:agent -w apps/api",
-    "mcp": "npm run mcp -w apps/api"
+    "mcp": "npm run mcp -w apps/api",
+    "lint:fix": "oxlint --fix",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "demo": "npm run demo -w apps/api"
+  },
+  "devDependencies": {
+    "oxlint": "1.81.0"
   }
 }
